@@ -1,0 +1,25 @@
+[package]
+name = "transluent"
+version = "1.0.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+cpal = "0.18.2"
+crossbeam-channel = "0.5.17"
+dirs = "7.0.0"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "clipboard"] }
+egui_commonmark = "0.26.0"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+parking_lot = "0.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ureq = "3"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
+xcap = "0.9.8"
+
+[profile.release]
+opt-level = 3
+strip = true

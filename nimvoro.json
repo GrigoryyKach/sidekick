@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "id": "transluent",
+  "name": "transluent",
+  "tagline": "Невидимый ИИ-ассистент для созвонов",
+  "description": "Полупрозрачное окно поверх всех, которое не видно при демонстрации экрана. Слушает собеседников, распознаёт речь локально через Whisper и по горячей клавише отправляет вопрос со скриншотом выбранному ИИ-агенту.",
+  "features": [
+    {
+      "title": "Скрыто от записи экрана",
+      "text": "Окно не попадает в демонстрацию экрана, на панель задач и в Alt+Tab."
+    },
+    {
+      "title": "Свой агент",
+      "text": "Claude Code, Anthropic API, любой OpenAI-совместимый сервер (OpenAI, OpenRouter, Ollama, LM Studio) или своя консольная команда."
+    },
+    {
+      "title": "Локальное распознавание речи",
+      "text": "faster-whisper на видеокарте слушает системный звук, микрофон не захватывается."
+    },
+    {
+      "title": "Скриншот + контекст",
+      "text": "Ctrl+Shift+Space отправляет снимок выбранного монитора и новые реплики собеседника."
+    },
+    {
+      "title": "Управление с клавиатуры",
+      "text": "Скрыть окно, сквозные клики, прокрутка ответа и выбор монитора — горячими клавишами."
+    }
+  ],
+  "category": "ИИ",
+  "accent": [
+    "#4f6bff",
+    "#8a5bff"
+  ],
+  "icon": "assets/icon.png",
+  "screenshots": [
+    "assets/screenshots/1.png",
+    "assets/screenshots/2.png",
+    "assets/screenshots/3.png"
+  ],
+  "exe": "transluent.exe",
+  "asset": "Transluent-win-x64.zip",
+  "requirements": [
+    "Windows 10 2004+ / 11 x64",
+    "Для распознавания речи: Python с faster-whisper (GPU NVIDIA или CPU)",
+    "Агент: Claude Code, ключ API или локальная модель"
+  ],
+  "settingsDir": "%APPDATA%\\transluent"
+}
