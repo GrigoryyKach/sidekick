@@ -13,7 +13,7 @@ A translucent overlay assistant for Windows (Rust + egui), formerly known as tra
 
 ## Languages
 
-The interface is available in English (default), Russian and Ukrainian. Pick the language in Settings → Window → Appearance; it applies immediately.
+The interface and the error messages are available in English (default), Russian and Ukrainian. Pick the language in Settings → Window → Appearance; it applies immediately.
 The starting language is taken from the app config, then from the `.nimvoro.json` marker next to the exe (written by the NIMVORO launcher), and falls back to English.
 
 ## Theme
@@ -63,7 +63,7 @@ Build with `cargo build --release`. Speech recognition needs Python with `faster
 ## Files
 
 - Settings and log: `%APPDATA%\Sidekick\` (`config.json`, `sidekick.log`). On the first start after the rename from transluent, `config.json` is copied over from `%APPDATA%\transluent\`; the old folder is left untouched.
-- For debugging: `SIDEKICK_SHOW_IN_CAPTURE=1` makes the window visible in screenshots, and `SIDEKICK_DATA_DIR` points the app at another settings folder.
+- For debugging: `SIDEKICK_SHOW_IN_CAPTURE=1` makes the window visible in screenshots, `SIDEKICK_DATA_DIR` points the app at another settings folder, and `SIDEKICK_DEMO=1` fills the window with demo transcript lines for screenshots (never set it in normal use).
 - The look comes from `src/theme.rs`, `src/i18n.rs` and `src/nimvoro.rs`, which are shared byte for byte with the other NIMVORO tools.
 
 ## Updates and NIMVORO

@@ -6,6 +6,7 @@ mod audio;
 mod capture;
 mod claude;
 mod config;
+mod errors;
 mod events;
 mod i18n;
 mod nimvoro;

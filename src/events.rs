@@ -18,7 +18,7 @@ pub enum Event {
     Transcript(String),
     /// The recognition model is loaded.
     SttReady { model: String, device: String, load_s: String },
-    SttStopped(String),
+    SttStopped,
     AudioLevel(f32),
     AudioError(String),
     /// The agent is ready to take questions.
@@ -29,5 +29,7 @@ pub enum Event {
     AgentDone { text: String, is_error: bool },
     /// The agent process exited; tail of its stderr.
     AgentExited(String),
+    /// A question failed; the error is localized by the interface.
+    AgentFailed(anyhow::Error),
     Log(String),
 }

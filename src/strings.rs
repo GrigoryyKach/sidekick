@@ -141,6 +141,21 @@ pub struct S {
     pub files_hint: &'static str,
     pub open_folder: &'static str,
     pub log: &'static str,
+
+    // Backend errors (the raw technical detail is appended after them)
+    pub err_claude_not_found: &'static str,
+    pub err_run_failed: &'static str,
+    pub err_no_anthropic_key: &'static str,
+    pub err_no_model: &'static str,
+    pub err_no_command: &'static str,
+    pub err_agent_stopped: &'static str,
+    pub err_agent_not_running: &'static str,
+    pub err_model_declined: &'static str,
+    pub err_command_exit: &'static str,
+    pub err_stt_script: &'static str,
+    pub err_stt_exited: &'static str,
+    pub err_no_monitors: &'static str,
+    pub err_capture: &'static str,
 }
 
 const EN: S = S {
@@ -279,6 +294,20 @@ const EN: S = S {
     files_hint: "Settings and log: {dir}",
     open_folder: "Open folder",
     log: "Log",
+
+    err_claude_not_found: "Claude Code (claude.exe) not found: set the path in the settings",
+    err_run_failed: "Could not run {name}",
+    err_no_anthropic_key: "No Anthropic API key: set it in the settings or in ANTHROPIC_API_KEY",
+    err_no_model: "Set the model in the agent settings",
+    err_no_command: "Set the agent command in the settings",
+    err_agent_stopped: "The agent was stopped",
+    err_agent_not_running: "The agent is not running",
+    err_model_declined: "The model declined to answer this request",
+    err_command_exit: "The command exited with code {code}",
+    err_stt_script: "stt_server.py not found next to the app",
+    err_stt_exited: "The recognition process exited",
+    err_no_monitors: "No monitors found",
+    err_capture: "Screen capture failed",
 };
 
 const RU: S = S {
@@ -417,6 +446,20 @@ const RU: S = S {
     files_hint: "Настройки и журнал: {dir}",
     open_folder: "Открыть папку",
     log: "Журнал",
+
+    err_claude_not_found: "Claude Code (claude.exe) не найден: укажите путь в настройках",
+    err_run_failed: "Не удалось запустить {name}",
+    err_no_anthropic_key: "Нет ключа Anthropic API: укажите его в настройках или в ANTHROPIC_API_KEY",
+    err_no_model: "Укажите модель в настройках агента",
+    err_no_command: "Укажите команду агента в настройках",
+    err_agent_stopped: "Агент остановлен",
+    err_agent_not_running: "Агент не запущен",
+    err_model_declined: "Модель отказалась отвечать на этот запрос",
+    err_command_exit: "Команда завершилась с кодом {code}",
+    err_stt_script: "Рядом с программой не найден stt_server.py",
+    err_stt_exited: "Процесс распознавания завершился",
+    err_no_monitors: "Мониторы не найдены",
+    err_capture: "Не удалось сделать снимок экрана",
 };
 
 const UK: S = S {
@@ -555,6 +598,20 @@ const UK: S = S {
     files_hint: "Налаштування та журнал: {dir}",
     open_folder: "Відкрити теку",
     log: "Журнал",
+
+    err_claude_not_found: "Claude Code (claude.exe) не знайдено: вкажіть шлях у налаштуваннях",
+    err_run_failed: "Не вдалося запустити {name}",
+    err_no_anthropic_key: "Немає ключа Anthropic API: вкажіть його в налаштуваннях або в ANTHROPIC_API_KEY",
+    err_no_model: "Вкажіть модель у налаштуваннях агента",
+    err_no_command: "Вкажіть команду агента в налаштуваннях",
+    err_agent_stopped: "Агента зупинено",
+    err_agent_not_running: "Агент не запущено",
+    err_model_declined: "Модель відмовилася відповідати на цей запит",
+    err_command_exit: "Команда завершилася з кодом {code}",
+    err_stt_script: "Поруч із програмою не знайдено stt_server.py",
+    err_stt_exited: "Процес розпізнавання завершився",
+    err_no_monitors: "Монітори не знайдено",
+    err_capture: "Не вдалося зробити знімок екрана",
 };
 
 pub static TABLE: Table<S> = Table { en: &EN, ru: &RU, uk: &UK };

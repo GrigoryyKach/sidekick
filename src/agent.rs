@@ -7,6 +7,7 @@
 //! - Custom command: the command runs for every question, the question goes to stdin, stdout is shown as the answer.
 
 use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, app_dir};
+use crate::errors::{AppError, Kind};
 use crate::events::Event;
 use crate::stt::CREATE_NO_WINDOW;
 use base64::Engine;
@@ -61,7 +62,7 @@ impl Worker {
                 };
                 match res {
                     Ok(full) => emit(Event::AgentDone { text: full, is_error: false }),
-                    Err(e) => emit(Event::AgentDone { text: format!("Error: {e}"), is_error: true }),
+                    Err(e) => emit(Event::AgentFailed(e)),
                 }
             }
         });
@@ -77,7 +78,7 @@ impl Agent for Worker {
     fn send(&mut self, text: &str, image_png_b64: Option<&str>) -> anyhow::Result<()> {
         self.jobs
             .send((text.to_string(), image_png_b64.map(str::to_string)))
-            .map_err(|_| anyhow::anyhow!("the agent was stopped"))
+            .map_err(|_| AppError::new(Kind::AgentStopped))
     }
 }
 
@@ -115,14 +116,14 @@ impl Backend {
             AgentKind::Anthropic => {
                 let key = key("ANTHROPIC_API_KEY");
                 if key.is_empty() {
-                    anyhow::bail!("no Anthropic API key: set it in the settings or in ANTHROPIC_API_KEY");
+                    return Err(AppError::new(Kind::NoAnthropicKey));
                 }
                 let model = if cfg.api_model.trim().is_empty() { DEFAULT_ANTHROPIC_MODEL.into() } else { cfg.api_model.trim().into() };
                 Ok(Backend::Anthropic(Http { base: base(DEFAULT_ANTHROPIC_URL), key, model, effort: cfg.effort.trim().into(), agent }))
             }
             AgentKind::OpenAi => {
                 if cfg.api_model.trim().is_empty() {
-                    anyhow::bail!("set the model in the agent settings");
+                    return Err(AppError::new(Kind::NoModel));
                 }
                 // The key is optional: local Ollama / LM Studio do not need one.
                 Ok(Backend::OpenAi(Http {
@@ -135,7 +136,7 @@ impl Backend {
             }
             AgentKind::Command => {
                 if cfg.command_line.trim().is_empty() {
-                    anyhow::bail!("set the agent command in the settings");
+                    return Err(AppError::new(Kind::NoCommand));
                 }
                 Ok(Backend::Command(cfg.command_line.trim().into()))
             }
@@ -281,7 +282,7 @@ impl Http {
             history.pop();
         }
         if stop_reason == "refusal" {
-            anyhow::bail!("the model declined to answer this request");
+            return Err(AppError::new(Kind::ModelDeclined));
         }
         Ok(full)
     }
@@ -383,7 +384,7 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("could not run \"{line}\": {e}"))?;
+        .map_err(|e| AppError::with(Kind::RunFailed(line.clone()), e))?;
     {
         let mut stdin = child.stdin.take().unwrap();
         let prompt = format!("{system}\n\n{text}\n");
@@ -420,7 +421,7 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
     let status = child.wait()?;
     let err = err_thread.join().unwrap_or_default();
     if !status.success() && full.trim().is_empty() {
-        anyhow::bail!("the command exited with code {:?}\n```\n{}\n```", status.code(), err.trim());
+        return Err(AppError::with(Kind::CommandExit(status.code()), err.trim()));
     }
     Ok(full)
 }

@@ -49,7 +49,7 @@ pub fn start(
     ev: Sender<Event>,
     ctx: eframe::egui::Context,
 ) -> anyhow::Result<Stt> {
-    let script = find_script().ok_or_else(|| anyhow::anyhow!("stt_server.py not found"))?;
+    let script = find_script().ok_or_else(|| crate::errors::AppError::new(crate::errors::Kind::SttScriptMissing))?;
     let mut child = Command::new(python)
         .arg("-u")
         .arg(&script)
@@ -61,7 +61,7 @@ pub fn start(
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("could not run {python}: {e}"))?;
+        .map_err(|e| crate::errors::AppError::with(crate::errors::Kind::RunFailed(python.to_string()), e))?;
 
     let mut stdin = child.stdin.take().unwrap();
     std::thread::spawn(move || {
@@ -95,7 +95,7 @@ pub fn start(
             let _ = ev2.send(e);
             ctx2.request_repaint();
         }
-        let _ = ev2.send(Event::SttStopped("the recognition process exited".into()));
+        let _ = ev2.send(Event::SttStopped);
         ctx2.request_repaint();
     });
 

@@ -1,7 +1,8 @@
 use crate::agent::{self, Agent};
 use crate::audio::{self, AudioHandle, SegmenterCfg};
 use crate::capture::{self, MonitorInfo};
-use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, DEFAULT_STT_PROMPT, DEFAULT_SYSTEM_PROMPT};
+use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, default_stt_prompt, default_system_prompt};
+use crate::errors::{self, AppError, Kind};
 use crate::events::{Event, Hotkey};
 use crate::i18n::{self, Lang};
 use crate::nimvoro::{self, UpdateState, Updater};
@@ -49,8 +50,9 @@ enum SttState {
     Off,
     Loading,
     Ready { model: String, device: String, load_s: String },
-    Stopped(String),
-    Failed(String),
+    Stopped,
+    /// Start failed: the coded error (localized at draw time) or a raw message.
+    Failed { app: Option<AppError>, raw: String },
     RestartApp,
 }
 
@@ -76,7 +78,8 @@ pub struct App {
     updater: Updater,
 
     agent: Arc<Mutex<Option<Box<dyn Agent>>>>,
-    agent_err: String,
+    agent_err: Option<anyhow::Error>,
+    demo: bool,
     agent_state: AgentState,
 
     seg_tx: Sender<Vec<f32>>,
@@ -137,7 +140,8 @@ impl App {
             tex: Textures::new(&ctx),
             updater,
             agent: Arc::new(Mutex::new(None)),
-            agent_err: String::new(),
+            agent_err: None,
+            demo: std::env::var_os("SIDEKICK_DEMO").is_some(),
             agent_state: AgentState::Off,
             seg_tx,
             seg_rx: Some(seg_rx),
@@ -164,11 +168,29 @@ impl App {
             last_geom_save: Instant::now(),
             last_style_check: Instant::now(),
         };
+        if app.demo {
+            app.load_demo();
+        }
         if app.cfg.listen_on_start {
             app.set_listening(true, &ctx);
         }
         app.ensure_agent(&ctx);
         app
+    }
+
+    /// Screenshot-only demo session (`SIDEKICK_DEMO=1`): a few transcript lines from "other participants"
+    /// and a recognizer that looks loaded. Never used in normal runs.
+    fn load_demo(&mut self) {
+        let lines = [
+            (12, "Let's start with the main question: how would you find two numbers in an array that add up to a target?"),
+            (31, "The array is not sorted, and it can contain a few thousand elements."),
+            (47, "What is the time complexity of your solution?"),
+            (58, "And could we do it with less extra memory?"),
+        ];
+        for (secs, text) in lines {
+            self.transcript.push(Line { at: Duration::from_secs(secs), text: text.to_string() });
+        }
+        self.stt_state = SttState::Ready { model: self.cfg.whisper_model.clone(), device: "CUDA".into(), load_s: "4.2".into() };
     }
 
     /// Strings of the current interface language.
@@ -227,7 +249,10 @@ impl App {
             AgentState::Starting => format!("{}: {}", self.agent_name(), s.agent_starting),
             AgentState::Ready => format!("{}: {}", self.agent_name(), s.agent_ready),
             AgentState::Stopped => format!("{}: {}", self.kind_title(self.cfg.agent), s.agent_stopped),
-            AgentState::Error => format!("{}: {}", self.kind_title(self.cfg.agent), self.agent_err),
+            AgentState::Error => {
+                let detail = self.agent_err.as_ref().map(|e| errors::localize(e, self.lang)).unwrap_or_default();
+                format!("{}: {}", self.kind_title(self.cfg.agent), detail)
+            }
         }
     }
 
@@ -239,7 +264,11 @@ impl App {
             SttState::Ready { model, device, load_s } => {
                 s.whisper_ready.replace("{model}", model).replace("{device}", device).replace("{s}", load_s)
             }
-            SttState::Stopped(e) | SttState::Failed(e) => format!("Whisper: {e}"),
+            SttState::Stopped => format!("Whisper: {}", s.err_stt_exited),
+            SttState::Failed { app, raw } => match app {
+                Some(a) => format!("Whisper: {}", a.text(self.lang)),
+                None => format!("Whisper: {raw}"),
+            },
             SttState::RestartApp => s.whisper_restart.to_string(),
         }
     }
@@ -259,7 +288,7 @@ impl App {
             }
             Err(e) => {
                 *g = None;
-                self.agent_err = e.to_string();
+                self.agent_err = Some(e);
                 self.agent_state = AgentState::Error;
                 false
             }
@@ -321,6 +350,7 @@ impl App {
         let agent = self.agent.clone();
         let (tx, ctx2) = (self.tx.clone(), ctx.clone());
         let (mon, edge) = (self.cfg.monitor_index, self.cfg.max_image_edge);
+        let lang = self.lang;
         std::thread::spawn(move || {
             let img = if with_screen {
                 match capture::capture_png_b64(mon, edge) {
@@ -335,10 +365,10 @@ impl App {
             };
             let res = match agent.lock().as_mut() {
                 Some(a) => a.send(&text, img.as_deref()),
-                None => Err(anyhow::anyhow!("the agent is not running")),
+                None => Err(AppError::new(Kind::AgentNotRunning)),
             };
             if let Err(e) = res {
-                let _ = tx.send(Event::AgentDone { text: s.send_failed.replace("{e}", &e.to_string()), is_error: true });
+                let _ = tx.send(Event::AgentDone { text: s.send_failed.replace("{e}", &errors::localize(&e, lang)), is_error: true });
             }
             ctx2.request_repaint();
         });
@@ -372,7 +402,8 @@ impl App {
                     self.stt_state = SttState::Loading;
                 }
                 Err(e) => {
-                    self.stt_state = SttState::Failed(e.to_string());
+                    let app = e.downcast_ref::<AppError>().cloned();
+                    self.stt_state = SttState::Failed { app, raw: e.to_string() };
                     return;
                 }
             }
@@ -419,8 +450,8 @@ impl App {
                     self.log(format!("Whisper {model} on {device} (loaded in {load_s} s)"));
                     self.stt_state = SttState::Ready { model, device, load_s };
                 }
-                Event::SttStopped(s) => {
-                    self.stt_state = SttState::Stopped(s);
+                Event::SttStopped => {
+                    self.stt_state = SttState::Stopped;
                     self.stt = None;
                     self.audio = None;
                     let (seg_tx, seg_rx) = audio::segment_channel();
@@ -438,6 +469,20 @@ impl App {
                 Event::AgentDelta(t) => {
                     if let Some(a) = self.answers.iter_mut().find(|a| !a.done) {
                         a.text += &t;
+                    }
+                }
+                Event::AgentFailed(e) => {
+                    let text = errors::localize(&e, self.lang);
+                    self.log(format!("agent error: {e}"));
+                    if let Some(a) = self.answers.iter_mut().find(|a| !a.done) {
+                        a.done = true;
+                        a.error = true;
+                        if !a.text.is_empty() {
+                            a.text += "
+
+";
+                        }
+                        a.text += &text;
                     }
                 }
                 Event::AgentDone { text, is_error } => {
@@ -582,7 +627,7 @@ impl App {
                 .on_hover_text(s.monitor_tip);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let listening = self.audio.is_some();
+                let listening = self.audio.is_some() || self.demo;
                 let mut on = listening;
                 let r = theme::switch(ui, &mut on, p).on_hover_text(s.listen_tip);
                 if r.changed() {
@@ -597,7 +642,7 @@ impl App {
         let s = self.s();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-            if self.capture_excluded {
+            if self.capture_excluded || self.demo {
                 chip(ui, p, OK, s.chip_hidden);
             } else {
                 chip(ui, p, WARN, s.chip_visible);
@@ -609,7 +654,7 @@ impl App {
                 AgentState::Off | AgentState::Stopped => p.muted,
             };
             chip(ui, p, col, &self.agent_status_text());
-            let stt_col = if self.audio.is_some() && self.stt.is_some() { OK } else { p.muted };
+            let stt_col = if (self.audio.is_some() && self.stt.is_some()) || self.demo { OK } else { p.muted };
             let r = chip(ui, p, stt_col, &self.stt_status_text());
             if self.audio.is_some() {
                 // Audio level right inside the recognition pill.
@@ -982,7 +1027,7 @@ impl App {
         theme::hint(ui, s.whisper_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.stt_prompt).desired_rows(3).desired_width(f32::INFINITY));
         if theme::button(ui, s.reset_whisper_prompt, Btn::Link, p).clicked() {
-            d.stt_prompt = DEFAULT_STT_PROMPT.into();
+            d.stt_prompt = default_stt_prompt(self.lang).into();
         }
     }
 
@@ -1033,7 +1078,7 @@ impl App {
         theme::hint(ui, s.system_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.system_prompt).desired_rows(12).desired_width(f32::INFINITY).font(theme::reg(13.0)));
         if theme::button(ui, s.reset_prompt, Btn::Link, p).clicked() {
-            d.system_prompt = DEFAULT_SYSTEM_PROMPT.into();
+            d.system_prompt = default_system_prompt(self.lang).into();
         }
     }
 

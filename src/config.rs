@@ -3,7 +3,7 @@ use crate::theme::ThemeMode;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "\
+const SYSTEM_PROMPT_EN: &str = "\
 You are an assistant that helps the user in real time during a call or a live-coding session.
 You receive: (a) a transcript of what the other participants say (this is NOT the user but the other people on the call), \
 (b) sometimes a screenshot of the user's screen, (c) sometimes a direct question from the user.
@@ -19,10 +19,9 @@ that is already on the screen.
 - Format: Markdown, brief. Do not use tools.";
 
 /// Nudges Whisper to keep English tech terms in Latin script.
-pub const DEFAULT_STT_PROMPT: &str = "Technical call. Keep terms in Latin script: React, useEffect, useState, JavaScript, TypeScript, Node.js, Python, race condition, deadlock, mutex, API, REST, SQL, Docker, Kubernetes, Git.";
+const STT_PROMPT_EN: &str = "Technical call. Keep terms in Latin script: React, useEffect, useState, JavaScript, TypeScript, Node.js, Python, race condition, deadlock, mutex, API, REST, SQL, Docker, Kubernetes, Git.";
 
-/// Defaults of version 1.0.0 (Russian). A config that still holds one of them gets the new default.
-const LEGACY_SYSTEM_PROMPT: &str = "\
+const SYSTEM_PROMPT_RU: &str = "\
 Ты — ассистент, который в реальном времени помогает пользователю на созвоне или во время live coding.
 Тебе приходят: (а) расшифровка речи собеседников (это НЕ пользователь, а другие участники звонка), \
 (б) иногда скриншот экрана пользователя, (в) иногда прямой вопрос пользователя.
@@ -36,7 +35,37 @@ const LEGACY_SYSTEM_PROMPT: &str = "\
 - Если это вопрос собеседника (теория, system design, поведенческий) — дай тезисы, которые легко пересказать своими словами.
 - Если расшифровка обрывочная или с ошибками распознавания — догадайся по контексту, о чём речь.
 - Формат — Markdown, коротко. Не используй инструменты.";
-const LEGACY_STT_PROMPT: &str = "Технический созвон. Термины пишем латиницей: React, useEffect, useState, JavaScript, TypeScript, Node.js, Python, race condition, deadlock, mutex, API, REST, SQL, Docker, Kubernetes, Git.";
+const STT_PROMPT_RU: &str = "Технический созвон. Термины пишем латиницей: React, useEffect, useState, JavaScript, TypeScript, Node.js, Python, race condition, deadlock, mutex, API, REST, SQL, Docker, Kubernetes, Git.";
+
+const SYSTEM_PROMPT_UK: &str = "Ти — асистент, який у реальному часі допомагає користувачеві на дзвінку чи під час live coding.
+Тобі надходять: (а) розшифровка мовлення співрозмовників (це НЕ користувач, а інші учасники дзвінка), (б) інколи знімок екрана користувача, (в) інколи пряме запитання користувача.
+
+Правила відповіді:
+- Відповідай одразу по суті, без вступів і без переказу запитання.
+- Почни з короткої суті (1–3 рядки), яку можна відразу промовити вголос.
+- Якщо на екрані задача з програмування: визнач мову за екраном/редактором, коротко опиши ідею, потім дай повний робочий код у блоці ```, потім складність за часом і пам'яттю. Враховуй сигнатуру функції, яка вже є на екрані.
+- Якщо це запитання співрозмовника (теорія, system design, поведінкове) — дай тези, які легко переказати своїми словами.
+- Якщо розшифровка уривчаста або з помилками розпізнавання — здогадайся за контекстом, про що йдеться.
+- Формат — Markdown, коротко. Не використовуй інструменти.";
+const STT_PROMPT_UK: &str = "Технічний дзвінок. Терміни пишемо латиницею: React, useEffect, useState, JavaScript, TypeScript, Node.js, Python, race condition, deadlock, mutex, API, REST, SQL, Docker, Kubernetes, Git.";
+
+/// Default system prompt for a fresh config, in the interface language.
+pub fn default_system_prompt(lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => SYSTEM_PROMPT_EN,
+        Lang::Ru => SYSTEM_PROMPT_RU,
+        Lang::Uk => SYSTEM_PROMPT_UK,
+    }
+}
+
+/// Default Whisper hint for a fresh config, in the interface language.
+pub fn default_stt_prompt(lang: Lang) -> &'static str {
+    match lang {
+        Lang::En => STT_PROMPT_EN,
+        Lang::Ru => STT_PROMPT_RU,
+        Lang::Uk => STT_PROMPT_UK,
+    }
+}
 
 /// Who answers the questions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
@@ -133,9 +162,9 @@ impl Default for Config {
             whisper_model: "large-v3-turbo".into(),
             whisper_device: "cuda".into(),
             stt_language: "auto".into(),
-            stt_prompt: DEFAULT_STT_PROMPT.into(),
+            stt_prompt: default_stt_prompt(i18n::resolve(None)).into(),
             answer_language: String::new(),
-            system_prompt: DEFAULT_SYSTEM_PROMPT.into(),
+            system_prompt: default_system_prompt(i18n::resolve(None)).into(),
             vad_threshold: 0.006,
             silence_ms: 800,
             max_segment_s: 20.0,
@@ -184,15 +213,8 @@ impl Config {
         let path = config_path();
         let Ok(text) = std::fs::read_to_string(&path) else { return Self::default() };
         match serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')) {
-            Ok(mut c) => {
-                if c.system_prompt == LEGACY_SYSTEM_PROMPT {
-                    c.system_prompt = DEFAULT_SYSTEM_PROMPT.into();
-                }
-                if c.stt_prompt == LEGACY_STT_PROMPT {
-                    c.stt_prompt = DEFAULT_STT_PROMPT.into();
-                }
-                c
-            }
+            // Saved prompts are never touched: existing installs keep behaving as before.
+            Ok(c) => c,
             Err(_) => {
                 // Keep an unreadable file instead of overwriting it with defaults on the next save.
                 let _ = std::fs::copy(&path, path.with_extension("invalid.json"));
