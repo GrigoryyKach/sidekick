@@ -16,17 +16,18 @@ pub enum Event {
     Hotkey(Hotkey),
     /// Final transcript of one phrase from the other call participants.
     Transcript(String),
-    SttReady(String),
+    /// The recognition model is loaded.
+    SttReady { model: String, device: String, load_s: String },
     SttStopped(String),
     AudioLevel(f32),
     AudioError(String),
-    /// Агент готов принимать вопросы.
+    /// The agent is ready to take questions.
     AgentReady,
-    /// Очередной кусок ответа.
+    /// Next chunk of the answer.
     AgentDelta(String),
-    /// Ответ закончен. `text` — полный текст (используется, если дельт не было) или текст ошибки.
+    /// The answer is complete. `text` is the full text (used when there were no deltas) or the error text.
     AgentDone { text: String, is_error: bool },
-    /// Процесс агента завершился; хвост stderr.
+    /// The agent process exited; tail of its stderr.
     AgentExited(String),
     Log(String),
 }

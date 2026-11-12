@@ -1,63 +1,75 @@
-# transluent
+# Sidekick
 
-Полупрозрачный оверлей-ассистент для Windows (Rust + egui).
+A translucent overlay assistant for Windows (Rust + egui), formerly known as transluent.
 
-- Окно поверх всех, скрыто от захвата экрана (`WDA_EXCLUDEFROMCAPTURE`), без кнопки на панели задач и в Alt+Tab.
-- Слушает системный звук (WASAPI loopback), то есть собеседников. Ваш микрофон не захватывается.
-- Речь распознаёт локальный faster-whisper (`stt_server.py`) на видеокарте или процессоре.
-- Отвечает агент, которого вы выберете в настройках (см. ниже).
-- Скриншот выбранного монитора отправляется вместе с вопросом.
+- An always-on-top window that is hidden from screen capture (`WDA_EXCLUDEFROMCAPTURE`), with no taskbar button and no Alt+Tab entry.
+- It listens to the system audio (WASAPI loopback), that is, to the other participants. Your microphone is never captured.
+- Speech is recognised locally by faster-whisper (`stt_server.py`) on a GPU or CPU.
+- The answers come from the agent you pick in Settings (see below).
+- A screenshot of the selected monitor is sent along with the question.
+- Text in the transcript and in the answers can be selected and copied. The mouse cursor always stays the default arrow, so it never gives the overlay away.
 
-![Главное окно](assets/screenshots/1.png)
+![Main window](assets/screenshots/1.png)
 
-## Агенты
+## Languages
 
-Настройки → «Агент» → «Кто отвечает»:
+The interface is available in English (default), Russian and Ukrainian. Pick the language in Settings → Window → Appearance; it applies immediately.
+The starting language is taken from the app config, then from the `.nimvoro.json` marker next to the exe (written by the NIMVORO launcher), and falls back to English.
 
-| Агент | Что нужно | Как работает |
+## Theme
+
+Settings → Window → Appearance → Theme: System (default, follows Windows live), Light or Dark.
+
+## Agents
+
+Settings → Agent → "Who answers":
+
+| Agent | What you need | How it works |
 |---|---|---|
-| **Claude Code** | Установленный и залогиненный Claude Code | Постоянный процесс `claude -p` в режиме stream-json, работает на вашей подписке без API-ключа |
-| **Anthropic API** | Ключ API (в настройках или `ANTHROPIC_API_KEY`) | Messages API с потоковым ответом. По умолчанию `claude-opus-5-5`; при отказе модели по соображениям безопасности API сам повторяет запрос на запасной модели (`fallbacks: "default"`) |
-| **OpenAI-совместимый** | Адрес сервера, модель, при необходимости ключ (`OPENAI_API_KEY`) | `/chat/completions` со `stream: true`. Готовые адреса: OpenAI, OpenRouter, Ollama, LM Studio. Для скриншотов нужна модель с поддержкой изображений |
-| **Своя команда** | Любая консольная программа | На каждый вопрос запускается команда, вопрос уходит в stdin, stdout показывается как ответ. `{image}` в команде заменяется путём к PNG со скриншотом |
+| **Claude Code** | Claude Code installed and signed in | A persistent `claude -p` process in stream-json mode; it runs on your subscription, no API key |
+| **Anthropic API** | An API key (in Settings or `ANTHROPIC_API_KEY`) | Messages API with a streamed answer. The default is `claude-opus-5-5`; if the model declines for safety reasons, the API retries on a fallback model itself (`fallbacks: "default"`) |
+| **OpenAI-compatible** | Server address, model and, if needed, a key (`OPENAI_API_KEY`) | `/chat/completions` with `stream: true`. Presets: OpenAI, OpenRouter, Ollama, LM Studio. Screenshots need a model with image support |
+| **Custom command** | Any console program | The command runs for every question, the question goes to stdin and stdout is shown as the answer. `{image}` in the command is replaced with the path to a PNG screenshot |
 
-Ключи хранятся только в `%APPDATA%\transluent\config.json`.
-Новый агент добавляется в `src/agent.rs`: вариант в `AgentKind` (`src/config.rs`) и реализация трейта `Agent` (`alive` и `send`), ответ отдаётся событиями `AgentDelta` / `AgentDone`.
+Keys are stored only in `%APPDATA%\Sidekick\config.json`.
+To add a new agent, add a variant to `AgentKind` (`src/config.rs`) and implement the `Agent` trait (`alive` and `send`) in `src/agent.rs`; the answer is delivered through the `AgentDelta` / `AgentDone` events.
 
-![Выбор агента](assets/screenshots/3.png)
+![Agent settings](assets/screenshots/2.png)
 
-## Запуск
+## Run
 
 ```
-transluent.exe
+Sidekick.exe
 ```
 
-Сборка: `cargo build --release`. Для распознавания речи нужны Python с `faster-whisper`, а для видеокарты ещё `nvidia-cublas-cu12` и `nvidia-cudnn-cu12`.
-`stt_server.py` должен лежать рядом с exe (в релизном архиве он уже там).
+Build with `cargo build --release`. Speech recognition needs Python with `faster-whisper`, and a GPU also needs `nvidia-cublas-cu12` and `nvidia-cudnn-cu12`.
+`stt_server.py` must sit next to the exe (it is already there in the release archive).
 
-## Горячие клавиши
+## Hotkeys
 
-| Клавиши | Действие |
+| Keys | Action |
 |---|---|
-| Ctrl+Shift+Space | спросить: скриншот монитора + новые реплики |
-| Ctrl+Shift+Enter | спросить: только новые реплики |
-| Ctrl+Shift+H | скрыть / показать окно |
-| Ctrl+Shift+T | сквозные клики (окно не перехватывает мышь) |
-| Ctrl+Shift+L | прослушивание вкл/выкл |
-| Ctrl+Shift+N | новый диалог |
-| Ctrl+Shift+PgUp / PgDn | прокрутка ответа |
-| Ctrl+Shift+1..4 | выбрать монитор |
+| Ctrl+Shift+Space | ask: monitor screenshot + new lines |
+| Ctrl+Shift+Enter | ask: new lines only |
+| Ctrl+Shift+H | hide / show the window |
+| Ctrl+Shift+T | click-through (the window does not catch the mouse) |
+| Ctrl+Shift+L | listening on/off |
+| Ctrl+Shift+N | new chat |
+| Ctrl+Shift+PgUp / PgDn | scroll the answer |
+| Ctrl+Shift+1..4 | pick the monitor |
 
-## Файлы
+![Light theme](assets/screenshots/3.png)
 
-- Настройки и лог: `%APPDATA%\transluent\` (`config.json`, `transluent.log`)
-- Для отладки: `TRANSLUENT_SHOW_IN_CAPTURE=1` делает окно видимым на скриншотах.
-- Оформление — общий с остальными утилитами набора `src/theme.rs`.
+## Files
 
-## Обновления и NIMVORO
+- Settings and log: `%APPDATA%\Sidekick\` (`config.json`, `sidekick.log`). On the first start after the rename from transluent, `config.json` is copied over from `%APPDATA%\transluent\`; the old folder is left untouched.
+- For debugging: `SIDEKICK_SHOW_IN_CAPTURE=1` makes the window visible in screenshots, and `SIDEKICK_DATA_DIR` points the app at another settings folder.
+- The look comes from `src/theme.rs`, `src/i18n.rs` and `src/nimvoro.rs`, which are shared byte for byte with the other NIMVORO tools.
 
-Утилита входит в набор [NIMVORO](https://github.com/GrigoryyKach/nimvoro): лаунчер ставит её в один клик и обновляет.
-При запуске программа проверяет последний [релиз](https://github.com/GrigoryyKach/transluent/releases/latest) (переключатель «Проверять обновления при запуске» в настройках, вкладка «О программе»).
-Если есть новая версия, кнопка «Обновить» передаёт обновление лаунчеру, а без лаунчера открывает страницу релиза.
+## Updates and NIMVORO
 
-Релиз собирается GitHub Actions при пуше тега: поднимите версию в `Cargo.toml`, затем `git tag v{версия} && git push --tags`.
+The tool is part of the [NIMVORO](https://github.com/GrigoryyKach/nimvoro) suite: the launcher installs and updates it in one click.
+On startup the app checks the latest [release](https://github.com/GrigoryyKach/sidekick/releases/latest) (the "Check on startup" switch in Settings → About).
+When a new version is available, the Update button hands the update to the launcher, or opens the release page if there is no launcher.
+
+A release is built by GitHub Actions when a tag is pushed: bump the version in `Cargo.toml`, then `git tag v{version} && git push --tags`.

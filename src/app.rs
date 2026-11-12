@@ -3,9 +3,11 @@ use crate::audio::{self, AudioHandle, SegmenterCfg};
 use crate::capture::{self, MonitorInfo};
 use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, DEFAULT_STT_PROMPT, DEFAULT_SYSTEM_PROMPT};
 use crate::events::{Event, Hotkey};
-use crate::nimvoro::{UpdateState, Updater};
+use crate::i18n::{self, Lang};
+use crate::nimvoro::{self, UpdateState, Updater};
 use crate::stt::{self, Stt};
-use crate::theme::{self, Btn, Pal, Textures};
+use crate::strings::{S, TABLE};
+use crate::theme::{self, Btn, Pal, Textures, ThemeMode};
 use crate::win;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, TextEdit, Ui, ViewportCommand, vec2};
@@ -37,6 +39,19 @@ enum AgentState {
     Starting,
     Ready,
     Error,
+    /// The process exited; it restarts on the next question.
+    Stopped,
+}
+
+/// State of the speech recognizer. Texts are built at draw time so a language switch applies live.
+#[derive(Clone, PartialEq)]
+enum SttState {
+    Off,
+    Loading,
+    Ready { model: String, device: String, load_s: String },
+    Stopped(String),
+    Failed(String),
+    RestartApp,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,6 +65,7 @@ enum SettingsTab {
 
 pub struct App {
     cfg: Config,
+    lang: Lang,
     title: String,
     tx: Sender<Event>,
     rx: Receiver<Event>,
@@ -60,13 +76,13 @@ pub struct App {
     updater: Updater,
 
     agent: Arc<Mutex<Option<Box<dyn Agent>>>>,
-    agent_status: String,
+    agent_err: String,
     agent_state: AgentState,
 
     seg_tx: Sender<Vec<f32>>,
     seg_rx: Option<Receiver<Vec<f32>>>,
     stt: Option<Stt>,
-    stt_status: String,
+    stt_state: SttState,
     audio: Option<AudioHandle>,
     level: f32,
 
@@ -96,14 +112,12 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config, title: String) -> Self {
         let (tx, rx) = unbounded();
         let ctx = cc.egui_ctx.clone();
-        theme::install(&ctx);
-        // Оверлей всегда тёмный: он лежит поверх чего угодно и должен читаться одинаково.
-        ctx.set_theme(egui::ThemePreference::Dark);
+        theme::install(&ctx, cfg.theme);
         ctx.add_plugin(DefaultCursor);
         win::spawn_hotkeys(tx.clone(), ctx.clone());
         ctx.set_zoom_factor(cfg.font_size / 14.0);
 
-        let updater = Updater::new("transluent", "GrigoryyKach/transluent", env!("CARGO_PKG_VERSION"));
+        let updater = Updater::new("sidekick", "GrigoryyKach/sidekick", env!("CARGO_PKG_VERSION"));
         if cfg.check_updates {
             let c = ctx.clone();
             updater.check(move || c.request_repaint());
@@ -112,6 +126,7 @@ impl App {
         let (seg_tx, seg_rx) = audio::segment_channel();
         let mut app = Self {
             draft: cfg.clone(),
+            lang: cfg.lang(),
             cfg,
             title,
             tx,
@@ -122,12 +137,12 @@ impl App {
             tex: Textures::new(&ctx),
             updater,
             agent: Arc::new(Mutex::new(None)),
-            agent_status: "не запущен".into(),
+            agent_err: String::new(),
             agent_state: AgentState::Off,
             seg_tx,
             seg_rx: Some(seg_rx),
             stt: None,
-            stt_status: "Whisper выключен".into(),
+            stt_state: SttState::Off,
             audio: None,
             level: 0.0,
             transcript: vec![],
@@ -156,12 +171,17 @@ impl App {
         app
     }
 
+    /// Strings of the current interface language.
+    fn s(&self) -> &'static S {
+        TABLE.get(self.lang)
+    }
+
     fn log(&mut self, s: impl Into<String>) {
         let s = s.into();
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(crate::config::app_dir().join("transluent.log"))
+            .open(crate::config::app_dir().join("sidekick.log"))
         {
             use std::io::Write;
             let _ = writeln!(f, "[{:>7.1}s] {s}", self.started.elapsed().as_secs_f32());
@@ -172,11 +192,56 @@ impl App {
         }
     }
 
-    // ---------- агент ----------
+    // ---------- language and theme ----------
+
+    fn set_language(&mut self, lang: Lang) {
+        self.lang = lang;
+        self.cfg.language = Some(lang.code().to_string());
+        self.draft.language = self.cfg.language.clone();
+        self.cfg.save();
+    }
+
+    fn set_theme(&mut self, ctx: &egui::Context, mode: ThemeMode) {
+        theme::apply(ctx, mode);
+        self.cfg.theme = mode;
+        self.draft.theme = mode;
+        self.cfg.save();
+    }
+
+    // ---------- agent ----------
+
+    fn kind_title(&self, k: AgentKind) -> &'static str {
+        self.s().agent_titles[k.index()]
+    }
 
     fn agent_name(&self) -> String {
         let model = self.cfg.agent_model();
-        if model.is_empty() { self.cfg.agent.title().to_string() } else { format!("{} · {model}", self.cfg.agent.title()) }
+        let title = self.kind_title(self.cfg.agent);
+        if model.is_empty() { title.to_string() } else { format!("{title} · {model}") }
+    }
+
+    fn agent_status_text(&self) -> String {
+        let s = self.s();
+        match self.agent_state {
+            AgentState::Off => s.agent_none.to_string(),
+            AgentState::Starting => format!("{}: {}", self.agent_name(), s.agent_starting),
+            AgentState::Ready => format!("{}: {}", self.agent_name(), s.agent_ready),
+            AgentState::Stopped => format!("{}: {}", self.kind_title(self.cfg.agent), s.agent_stopped),
+            AgentState::Error => format!("{}: {}", self.kind_title(self.cfg.agent), self.agent_err),
+        }
+    }
+
+    fn stt_status_text(&self) -> String {
+        let s = self.s();
+        match &self.stt_state {
+            SttState::Off => s.whisper_off.to_string(),
+            SttState::Loading => s.whisper_loading.replace("{model}", &self.cfg.whisper_model),
+            SttState::Ready { model, device, load_s } => {
+                s.whisper_ready.replace("{model}", model).replace("{device}", device).replace("{s}", load_s)
+            }
+            SttState::Stopped(e) | SttState::Failed(e) => format!("Whisper: {e}"),
+            SttState::RestartApp => s.whisper_restart.to_string(),
+        }
     }
 
     fn ensure_agent(&mut self, ctx: &egui::Context) -> bool {
@@ -189,13 +254,12 @@ impl App {
         match agent::start(&self.cfg, self.tx.clone(), ctx.clone()) {
             Ok(a) => {
                 *g = Some(a);
-                self.agent_status = format!("{}: запуск…", self.agent_name());
                 self.agent_state = AgentState::Starting;
                 true
             }
             Err(e) => {
                 *g = None;
-                self.agent_status = format!("{}: {e}", self.cfg.agent.title());
+                self.agent_err = e.to_string();
                 self.agent_state = AgentState::Error;
                 false
             }
@@ -217,36 +281,39 @@ impl App {
     }
 
     fn ask(&mut self, with_screen: bool, user_text: Option<String>, ctx: &egui::Context) {
+        let s = self.s();
         if !self.ensure_agent(ctx) {
             self.answers.push(Answer {
-                title: "Агент не запущен".into(),
+                title: s.no_agent_title.into(),
                 with_screen: false,
-                text: format!("{}\n\nПроверьте настройки агента (⚙ → Агент).", self.agent_status),
+                text: format!("{}\n\n{}", self.agent_status_text(), s.no_agent_hint),
                 done: true,
                 error: true,
             });
             return;
         }
-        let new_lines: Vec<String> = self.transcript[self.sent_upto..].iter().map(|l| format!("— {}", l.text)).collect();
+        let new_lines: Vec<String> = self.transcript[self.sent_upto..].iter().map(|l| format!("- {}", l.text)).collect();
         self.sent_upto = self.transcript.len();
 
+        // What the agent receives is not interface copy and stays in English.
         let mut text = String::new();
         if !new_lines.is_empty() {
-            text += "Новые реплики собеседника (расшифровка):\n";
+            text += "New lines from the other participants (transcript):\n";
             text += &new_lines.join("\n");
             text += "\n\n";
         }
         match &user_text {
-            Some(q) => text += &format!("Мой вопрос: {q}"),
-            None if with_screen => text += "Посмотри на экран (скриншот) и помоги: реши задачу / ответь на вопрос собеседника.",
-            None if new_lines.is_empty() => text += "Новых реплик нет. Продолжи или уточни предыдущий ответ.",
-            None => text += "Помоги ответить собеседнику.",
+            Some(q) => text += &format!("My question: {q}"),
+            None if with_screen => text += "Look at the screen (screenshot) and help: solve the task or answer the other participant's question.",
+            None if new_lines.is_empty() => text += "There are no new lines. Continue or clarify your previous answer.",
+            None => text += "Help me answer the other participant.",
         }
 
+        let lines = i18n::plural(self.lang, new_lines.len(), &s.lines);
         let title = match (&user_text, with_screen) {
             (Some(q), _) => truncate(q, 60),
-            (None, true) => format!("Экран {} и речь · {}", self.cfg.monitor_index + 1, plural(new_lines.len(), "реплика", "реплики", "реплик")),
-            (None, false) => format!("Речь · {}", plural(new_lines.len(), "реплика", "реплики", "реплик")),
+            (None, true) => s.title_screen.replace("{m}", &(self.cfg.monitor_index + 1).to_string()).replace("{x}", &lines),
+            (None, false) => s.title_speech.replace("{x}", &lines),
         };
         self.answers.push(Answer { title, with_screen, text: String::new(), done: false, error: false });
         self.stick_bottom = true;
@@ -259,7 +326,7 @@ impl App {
                 match capture::capture_png_b64(mon, edge) {
                     Ok(i) => Some(i),
                     Err(e) => {
-                        let _ = tx.send(Event::Log(format!("скриншот: {e}")));
+                        let _ = tx.send(Event::Log(format!("screenshot: {e}")));
                         None
                     }
                 }
@@ -268,16 +335,16 @@ impl App {
             };
             let res = match agent.lock().as_mut() {
                 Some(a) => a.send(&text, img.as_deref()),
-                None => Err(anyhow::anyhow!("агент не запущен")),
+                None => Err(anyhow::anyhow!("the agent is not running")),
             };
             if let Err(e) = res {
-                let _ = tx.send(Event::AgentDone { text: format!("Не удалось отправить: {e}"), is_error: true });
+                let _ = tx.send(Event::AgentDone { text: s.send_failed.replace("{e}", &e.to_string()), is_error: true });
             }
             ctx2.request_repaint();
         });
     }
 
-    // ---------- звук / распознавание ----------
+    // ---------- audio / recognition ----------
 
     fn set_listening(&mut self, on: bool, ctx: &egui::Context) {
         if !on {
@@ -287,7 +354,7 @@ impl App {
         }
         if self.stt.is_none() {
             let Some(rx) = self.seg_rx.take() else {
-                self.stt_status = "Whisper: перезапустите приложение".into();
+                self.stt_state = SttState::RestartApp;
                 return;
             };
             match stt::start(
@@ -302,10 +369,10 @@ impl App {
             ) {
                 Ok(s) => {
                     self.stt = Some(s);
-                    self.stt_status = format!("Whisper {}: загрузка модели…", self.cfg.whisper_model);
+                    self.stt_state = SttState::Loading;
                 }
                 Err(e) => {
-                    self.stt_status = format!("Whisper: {e}");
+                    self.stt_state = SttState::Failed(e.to_string());
                     return;
                 }
             }
@@ -329,13 +396,13 @@ impl App {
         let (seg_tx, seg_rx) = audio::segment_channel();
         self.seg_tx = seg_tx;
         self.seg_rx = Some(seg_rx);
-        self.stt_status = "Whisper выключен".into();
+        self.stt_state = SttState::Off;
         if listening {
             self.set_listening(true, ctx);
         }
     }
 
-    // ---------- события ----------
+    // ---------- events ----------
 
     fn handle_events(&mut self, ctx: &egui::Context) {
         while let Ok(e) = self.rx.try_recv() {
@@ -348,12 +415,12 @@ impl App {
                         self.sent_upto = self.sent_upto.saturating_sub(1);
                     }
                 }
-                Event::SttReady(s) => {
-                    self.log(s.clone());
-                    self.stt_status = s;
+                Event::SttReady { model, device, load_s } => {
+                    self.log(format!("Whisper {model} on {device} (loaded in {load_s} s)"));
+                    self.stt_state = SttState::Ready { model, device, load_s };
                 }
                 Event::SttStopped(s) => {
-                    self.stt_status = format!("Whisper: {s}");
+                    self.stt_state = SttState::Stopped(s);
                     self.stt = None;
                     self.audio = None;
                     let (seg_tx, seg_rx) = audio::segment_channel();
@@ -362,11 +429,10 @@ impl App {
                 }
                 Event::AudioLevel(l) => self.level = l,
                 Event::AudioError(s) => {
-                    self.log(format!("звук: {s}"));
+                    self.log(format!("audio: {s}"));
                     self.audio = None;
                 }
                 Event::AgentReady => {
-                    self.agent_status = format!("{}: готов", self.agent_name());
                     self.agent_state = AgentState::Ready;
                 }
                 Event::AgentDelta(t) => {
@@ -387,18 +453,18 @@ impl App {
                     }
                 }
                 Event::AgentExited(tail) => {
+                    let exited = self.s().agent_exited;
                     let was_running = self.agent.lock().as_mut().map(|c| !c.alive()).unwrap_or(false);
                     for a in self.answers.iter_mut().filter(|a| !a.done) {
                         a.done = true;
                         a.error = true;
-                        a.text += &format!("\n\nАгент завершился:\n```\n{tail}\n```");
+                        a.text += &format!("\n\n{exited}\n```\n{tail}\n```");
                     }
                     if was_running {
                         *self.agent.lock() = None;
-                        self.agent_status = format!("{}: остановлен, перезапустится при запросе", self.cfg.agent.title());
-                        self.agent_state = AgentState::Off;
+                        self.agent_state = AgentState::Stopped;
                         if !tail.trim().is_empty() {
-                            self.log(format!("агент: {tail}"));
+                            self.log(format!("agent: {tail}"));
                         }
                     }
                 }
@@ -433,9 +499,9 @@ impl App {
         }
     }
 
-    // ---------- интерфейс ----------
+    // ---------- interface ----------
 
-    /// Полупрозрачная заливка карточек: следует за настройкой прозрачности окна.
+    /// Semi-transparent card fill: follows the window opacity setting.
     fn card_fill(&self, p: &Pal) -> Color32 {
         let a = (self.cfg.opacity * 0.85 * 255.0).clamp(30.0, 235.0) as u8;
         let [r, g, b, _] = p.card.to_array();
@@ -443,18 +509,21 @@ impl App {
     }
 
     fn header(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            theme::logo(ui, 24.0, "t", &self.tex);
+            theme::logo(ui, 24.0, "S", &self.tex);
             let r = ui.add(
-                egui::Label::new(RichText::new("transluent").font(theme::semi(15.0)).color(p.text)).sense(Sense::click_and_drag()),
+                egui::Label::new(RichText::new("Sidekick").font(theme::semi(15.0)).color(p.text))
+                    .selectable(false)
+                    .sense(Sense::click_and_drag()),
             );
             if r.drag_started() {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
-            r.on_hover_text("Перетащите, чтобы переместить окно");
-            // Пустое место заголовка тоже таскает окно.
+            r.on_hover_text(s.drag_tip);
+            // The empty part of the header drags the window too.
             let rest = ui.available_rect_before_wrap();
             let drag = ui.interact(rest.with_max_x(rest.max.x - 150.0), ui.scope_id().with("drag"), Sense::click_and_drag());
             if drag.drag_started() {
@@ -463,17 +532,17 @@ impl App {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if theme::button(ui, "✕", Btn::Small, p).on_hover_text("Выход").clicked() {
+                if theme::button(ui, "✕", Btn::Small, p).on_hover_text(s.exit).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 }
-                if theme::button(ui, "—", Btn::Small, p).on_hover_text("Скрыть (Ctrl+Shift+H — вернуть)").clicked() {
+                if theme::button(ui, "—", Btn::Small, p).on_hover_text(s.hide_tip).clicked() {
                     win::set_visible(false);
                 }
                 let gear = if self.show_settings { Btn::Soft } else { Btn::Small };
-                if theme::button(ui, "⚙", gear, p).on_hover_text("Настройки").clicked() {
+                if theme::button(ui, "⚙", gear, p).on_hover_text(s.settings).clicked() {
                     self.toggle_settings();
                 }
-                if theme::button(ui, "Новый диалог", Btn::Small, p).on_hover_text("Ctrl+Shift+N").clicked() {
+                if theme::button(ui, s.new_chat, Btn::Small, p).on_hover_text("Ctrl+Shift+N").clicked() {
                     self.new_chat(&ctx);
                 }
             });
@@ -487,21 +556,22 @@ impl App {
     }
 
     fn actions(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if theme::button(ui, "📷  Экран + речь", Btn::Soft, p).on_hover_text("Ctrl+Shift+Space").clicked() {
+            if theme::button(ui, s.btn_screen, Btn::Soft, p).on_hover_text("Ctrl+Shift+Space").clicked() {
                 self.ask(true, None, &ctx);
             }
-            if theme::button(ui, "💬  Речь", Btn::Ghost, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
+            if theme::button(ui, s.btn_speech, Btn::Ghost, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
                 self.ask(false, None, &ctx);
             }
             egui::ComboBox::from_id_salt("mon")
-                .selected_text(format!("Монитор {}", self.cfg.monitor_index + 1))
-                .width(104.0)
+                .selected_text(s.monitor_n.replace("{n}", &(self.cfg.monitor_index + 1).to_string()))
+                .width(110.0)
                 .show_ui(ui, |ui| {
                     for (i, m) in self.monitors.iter().enumerate() {
-                        if ui.selectable_label(self.cfg.monitor_index == i, &m.label).clicked() {
+                        if ui.selectable_label(self.cfg.monitor_index == i, m.label(s.monitor_primary)).clicked() {
                             self.cfg.monitor_index = i;
                             self.draft.monitor_index = i;
                             self.cfg.save();
@@ -509,39 +579,40 @@ impl App {
                     }
                 })
                 .response
-                .on_hover_text("Монитор для скриншотов (Ctrl+Shift+1..4)");
+                .on_hover_text(s.monitor_tip);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let listening = self.audio.is_some();
                 let mut on = listening;
-                let r = theme::switch(ui, &mut on, p).on_hover_text("Слушать звонок (Ctrl+Shift+L)");
+                let r = theme::switch(ui, &mut on, p).on_hover_text(s.listen_tip);
                 if r.changed() {
                     self.set_listening(on, &ctx);
                 }
-                ui.label(RichText::new("Слушать").font(theme::reg(13.0)).color(if listening { p.text } else { p.muted }));
+                ui.label(RichText::new(s.listen).font(theme::reg(13.0)).color(if listening { p.text } else { p.muted }));
             });
         });
     }
 
     fn status_row(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
             if self.capture_excluded {
-                chip(ui, p, OK, "скрыто от записи экрана");
+                chip(ui, p, OK, s.chip_hidden);
             } else {
-                chip(ui, p, WARN, "окно видно при записи");
+                chip(ui, p, WARN, s.chip_visible);
             }
             let col = match self.agent_state {
                 AgentState::Ready => OK,
                 AgentState::Starting => WARN,
                 AgentState::Error => BAD,
-                AgentState::Off => p.muted,
+                AgentState::Off | AgentState::Stopped => p.muted,
             };
-            chip(ui, p, col, &self.agent_status);
+            chip(ui, p, col, &self.agent_status_text());
             let stt_col = if self.audio.is_some() && self.stt.is_some() { OK } else { p.muted };
-            let r = chip(ui, p, stt_col, &self.stt_status);
+            let r = chip(ui, p, stt_col, &self.stt_status_text());
             if self.audio.is_some() {
-                // Уровень звука прямо в «таблетке» распознавания.
+                // Audio level right inside the recognition pill.
                 let w = (self.level * 800.0).clamp(0.0, 1.0);
                 let bar = egui::Rect::from_min_size(r.rect.left_bottom() + vec2(10.0, -4.0), vec2(r.rect.width() - 20.0, 2.0));
                 ui.painter().rect_filled(bar, 1.0, p.track);
@@ -550,19 +621,20 @@ impl App {
                 ui.painter().rect_filled(fill, 1.0, if self.level > self.cfg.vad_threshold { OK } else { p.muted });
             }
             if self.click_through {
-                chip(ui, p, p.accent, "сквозные клики · Ctrl+Shift+T");
+                chip(ui, p, p.accent, s.chip_passthrough);
             }
         });
     }
 
     fn update_banner(&mut self, ui: &mut Ui, p: &Pal) {
         let UpdateState::Available { version, .. } = self.updater.state() else { return };
+        let t = nimvoro::strings(self.lang);
         Frame::new().fill(p.accent_soft).corner_radius(10.0).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("Доступна версия {version}")).font(theme::semi(13.0)).color(p.text));
+                ui.label(RichText::new(t.available.replace("{v}", &version)).font(theme::semi(13.0)).color(p.text));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if theme::button(ui, "Обновить", Btn::Soft, p).clicked() && self.updater.apply() {
+                    if theme::button(ui, t.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
                         self.cfg.save();
                         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     }
@@ -572,16 +644,17 @@ impl App {
     }
 
     fn transcript_view(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let new = self.transcript.len() - self.sent_upto;
         Frame::new().fill(self.card_fill(p)).corner_radius(12.0).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let head = ui.horizontal(|ui| {
-                theme::caps(ui, "Расшифровка", p);
+                theme::caps(ui, s.transcript, p);
                 if new > 0 {
-                    theme::pill(ui, &format!("{new} новых"), p);
+                    theme::pill(ui, &i18n::plural(self.lang, new, &s.new_lines), p);
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(if self.show_transcript { "свернуть" } else { "развернуть" }).font(theme::reg(12.0)).color(p.muted));
+                    ui.label(RichText::new(if self.show_transcript { s.collapse } else { s.expand }).font(theme::reg(12.0)).color(p.muted));
                 });
             });
             if ui.interact(head.response.rect, ui.scope_id().with("tr-head"), Sense::click()).clicked() {
@@ -591,14 +664,16 @@ impl App {
                 return;
             }
             egui::ScrollArea::vertical().id_salt("trs").max_height(110.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
+                // The shared theme turns label selection off; the transcript must be copyable.
+                ui.style_mut().interaction.selectable_labels = true;
                 if self.transcript.is_empty() {
-                    theme::hint(ui, "Здесь появится речь собеседников…", p);
+                    theme::hint(ui, s.transcript_empty, p);
                 }
                 for (i, l) in self.transcript.iter().enumerate() {
-                    let s = l.at.as_secs();
+                    let secs = l.at.as_secs();
                     let fresh = i >= self.sent_upto;
                     ui.horizontal_top(|ui| {
-                        ui.label(RichText::new(format!("{:02}:{:02}", s / 60, s % 60)).font(theme::reg(12.0)).color(p.muted));
+                        ui.label(RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60)).font(theme::reg(12.0)).color(p.muted));
                         ui.add(egui::Label::new(RichText::new(&l.text).font(theme::reg(13.5)).color(if fresh { p.text } else { p.muted })).wrap());
                     });
                 }
@@ -607,6 +682,7 @@ impl App {
     }
 
     fn answers_view(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let avail = ui.available_height() - 48.0;
         let mut sa = egui::ScrollArea::vertical()
             .id_salt("ans")
@@ -619,14 +695,16 @@ impl App {
         }
         let fill = self.card_fill(p);
         let out = sa.show(ui, |ui| {
+            // The shared theme turns label selection off; answers must be selectable and copyable.
+            ui.style_mut().interaction.selectable_labels = true;
             if self.answers.is_empty() {
                 Frame::new().fill(fill).corner_radius(12.0).inner_margin(Margin::same(14)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new("Готов помочь").font(theme::semi(15.0)).color(p.text));
-                    theme::hint(ui, "Нажмите Ctrl+Shift+Space — я посмотрю на выбранный монитор и последние реплики собеседника.", p);
+                    ui.label(RichText::new(s.ready_title).font(theme::semi(15.0)).color(p.text));
+                    theme::hint(ui, s.ready_hint, p);
                     ui.add_space(6.0);
                     egui::Grid::new("keys").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                        for (k, d) in win::HOTKEY_HELP {
+                        for (k, d) in win::HOTKEY_KEYS.iter().zip(s.hotkeys.iter()) {
                             ui.label(RichText::new(*k).font(theme::semi(12.0)).color(p.accent));
                             ui.label(RichText::new(*d).font(theme::reg(12.5)).color(p.muted));
                             ui.end_row();
@@ -649,14 +727,14 @@ impl App {
                             ui.add(egui::Spinner::new().size(12.0).color(p.accent));
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if a.done && theme::button(ui, "Копировать", Btn::Small, p).clicked() {
+                            if a.done && theme::button(ui, s.copy, Btn::Small, p).clicked() {
                                 ui.ctx().copy_text(a.text.clone());
                             }
                         });
                     });
                     ui.add_space(2.0);
                     if a.text.is_empty() && !a.done {
-                        theme::hint(ui, "думаю…", p);
+                        theme::hint(ui, s.thinking, p);
                     } else {
                         CommonMarkViewer::new().show(ui, &mut self.md, &a.text);
                     }
@@ -674,50 +752,62 @@ impl App {
     }
 
     fn input_bar(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let kind = if self.input_with_screen { Btn::Soft } else { Btn::Ghost };
-            if theme::button(ui, "📷", kind, p).on_hover_text("Приложить скриншот к вопросу").clicked() {
+            if theme::button(ui, "📷", kind, p).on_hover_text(s.attach_tip).clicked() {
                 self.input_with_screen = !self.input_with_screen;
             }
             let w = ui.available_width() - 44.0;
             let r = ui.add(
                 TextEdit::singleline(&mut self.input)
-                    .hint_text("Свой вопрос…")
+                    .hint_text(s.ask_hint)
                     .desired_width(w)
                     .margin(Margin::symmetric(10, 7))
                     .font(theme::reg(14.0)),
             );
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (theme::button(ui, "➤", Btn::Soft, p).on_hover_text("Отправить (Enter)").clicked() || enter) && !self.input.trim().is_empty() {
+            if (theme::button(ui, "➤", Btn::Soft, p).on_hover_text(s.send_tip).clicked() || enter) && !self.input.trim().is_empty() {
                 let q = std::mem::take(&mut self.input);
                 self.ask(self.input_with_screen, Some(q), &ctx);
             }
         });
     }
 
-    // ---------- настройки ----------
+    // ---------- settings ----------
 
     fn settings_window(&mut self, ctx: &egui::Context, p: &Pal) {
-        let mut open = self.show_settings;
+        let s = self.s();
+        let mut close = false;
         let mut apply = false;
-        egui::Window::new(RichText::new("Настройки").font(theme::semi(15.0)).color(p.text))
-            .open(&mut open)
+        // No native title bar (it would add a second, unstyled close button): the header is drawn here.
+        egui::Window::new("sidekick-settings")
+            .title_bar(false)
             .collapsible(false)
             .default_width(460.0)
             .min_width(420.0)
             .default_height(520.0)
-            .frame(Frame::window(&ctx.style_of(egui::Theme::Dark)).fill(p.card).inner_margin(Margin::same(16)))
+            .frame(Frame::window(&ctx.style_of(ctx.theme())).fill(p.card).inner_margin(Margin::same(16)))
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(s.settings).font(theme::semi(15.0)).color(p.text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if theme::button(ui, "✕", Btn::Small, p).on_hover_text(s.close).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     for (tab, name) in [
-                        (SettingsTab::Agent, "Агент"),
-                        (SettingsTab::Speech, "Речь"),
-                        (SettingsTab::Window, "Окно"),
-                        (SettingsTab::Prompts, "Промпты"),
-                        (SettingsTab::About, "О программе"),
+                        (SettingsTab::Agent, s.tab_agent),
+                        (SettingsTab::Speech, s.tab_speech),
+                        (SettingsTab::Window, s.tab_window),
+                        (SettingsTab::Prompts, s.tab_prompts),
+                        (SettingsTab::About, s.tab_about),
                     ] {
                         let kind = if self.settings_tab == tab { Btn::Soft } else { Btn::Ghost };
                         if theme::button(ui, name, kind, p).clicked() {
@@ -739,64 +829,61 @@ impl App {
                 theme::divider(ui, p);
                 ui.horizontal(|ui| {
                     let dirty = !same_config(&self.draft, &self.cfg);
-                    let label = if dirty { "Применить" } else { "Сохранено" };
+                    let label = if dirty { s.apply } else { s.saved };
                     if theme::button(ui, label, if dirty { Btn::Soft } else { Btn::Ghost }, p).clicked() && dirty {
                         apply = true;
                     }
-                    if dirty && theme::button(ui, "Отменить", Btn::Link, p).clicked() {
+                    if dirty && theme::button(ui, s.revert, Btn::Link, p).clicked() {
                         self.draft = self.cfg.clone();
                     }
                 });
             });
-        self.show_settings = open;
+        if close {
+            self.show_settings = false;
+        }
         if apply {
             self.apply_settings(ctx);
         }
     }
 
     fn settings_agent(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, "Кто отвечает", p);
+        theme::caps(ui, s.who_answers, p);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for k in AgentKind::ALL {
                 let kind = if d.agent == k { Btn::Soft } else { Btn::Ghost };
-                if theme::button(ui, k.title(), kind, p).clicked() {
+                if theme::button(ui, s.agent_titles[k.index()], kind, p).clicked() {
                     d.agent = k;
                 }
             }
         });
         ui.add_space(4.0);
-        let about = match d.agent {
-            AgentKind::ClaudeCode => "Claude Code на вашей подписке, без API-ключа. Нужен установленный и залогиненный Claude Code.",
-            AgentKind::Anthropic => "Claude через Anthropic API по ключу. Ключ хранится только в config.json на этом компьютере.",
-            AgentKind::OpenAi => "Любой сервер с OpenAI-совместимым API: OpenAI, OpenRouter, Groq, Ollama, LM Studio, vLLM. Скриншоты нужны модели с поддержкой изображений.",
-            AgentKind::Command => "Любая консольная программа: вопрос приходит ей в stdin, ответ берётся из stdout. Подойдут ollama run, llm, gemini -p и свои скрипты.",
-        };
-        theme::hint(ui, about, p);
+        theme::hint(ui, s.agent_about[d.agent.index()], p);
         theme::divider(ui, p);
 
         match d.agent {
             AgentKind::ClaudeCode => {
                 theme::caps(ui, "Claude Code", p);
-                field(ui, p, "Модель", None, |ui| {
+                field(ui, p, s.model, None, |ui| {
                     egui::ComboBox::from_id_salt("model").selected_text(&d.model).show_ui(ui, |ui| {
                         for m in ["sonnet", "opus", "haiku"] {
                             ui.selectable_value(&mut d.model, m.to_string(), m);
                         }
                     });
                 });
-                effort_field(ui, p, &mut d.effort);
-                field(ui, p, "Путь к claude.exe", Some("Пусто — найти автоматически"), |ui| {
-                    ui.add(TextEdit::singleline(&mut d.claude_path).hint_text("авто").desired_width(f32::INFINITY));
+                effort_field(ui, p, s, &mut d.effort);
+                field(ui, p, s.claude_path, Some(s.claude_path_hint), |ui| {
+                    ui.add(TextEdit::singleline(&mut d.claude_path).hint_text(s.auto).desired_width(f32::INFINITY));
                 });
             }
             AgentKind::Anthropic => {
                 theme::caps(ui, "Anthropic API", p);
-                field(ui, p, "Ключ API", Some("Пусто — взять из ANTHROPIC_API_KEY"), |ui| {
-                    key_edit(ui, p, &mut d.api_key, &mut self.show_key);
+                field(ui, p, s.api_key, Some(s.api_key_hint_anthropic), |ui| {
+                    key_edit(ui, p, s, &mut d.api_key, &mut self.show_key);
                 });
-                field(ui, p, "Модель", None, |ui| {
+                field(ui, p, s.model, None, |ui| {
                     let shown = if d.api_model.is_empty() { DEFAULT_ANTHROPIC_MODEL.to_string() } else { d.api_model.clone() };
                     egui::ComboBox::from_id_salt("amodel").selected_text(shown).show_ui(ui, |ui| {
                         for m in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2"] {
@@ -804,13 +891,13 @@ impl App {
                         }
                     });
                 });
-                effort_field(ui, p, &mut d.effort);
-                field(ui, p, "Адрес API", Some("Для прокси или шлюза; пусто — официальный"), |ui| {
+                effort_field(ui, p, s, &mut d.effort);
+                field(ui, p, s.api_url, Some(s.api_url_hint_anthropic), |ui| {
                     ui.add(TextEdit::singleline(&mut d.api_base_url).hint_text(DEFAULT_ANTHROPIC_URL).desired_width(f32::INFINITY));
                 });
             }
             AgentKind::OpenAi => {
-                theme::caps(ui, "Сервер", p);
+                theme::caps(ui, s.server, p);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for (name, url) in [
@@ -825,147 +912,164 @@ impl App {
                         }
                     }
                 });
-                field(ui, p, "Адрес API", Some("До /chat/completions"), |ui| {
+                field(ui, p, s.api_url, Some(s.api_url_hint_openai), |ui| {
                     ui.add(TextEdit::singleline(&mut d.api_base_url).hint_text(DEFAULT_OPENAI_URL).desired_width(f32::INFINITY));
                 });
-                field(ui, p, "Ключ API", Some("Пусто — OPENAI_API_KEY; локальным серверам не нужен"), |ui| {
-                    key_edit(ui, p, &mut d.api_key, &mut self.show_key);
+                field(ui, p, s.api_key, Some(s.api_key_hint_openai), |ui| {
+                    key_edit(ui, p, s, &mut d.api_key, &mut self.show_key);
                 });
-                field(ui, p, "Модель", Some("Например gpt-5, llama3.2-vision, qwen2.5-vl"), |ui| {
-                    ui.add(TextEdit::singleline(&mut d.api_model).hint_text("название модели").desired_width(f32::INFINITY));
+                field(ui, p, s.model, Some(s.model_hint_openai), |ui| {
+                    ui.add(TextEdit::singleline(&mut d.api_model).hint_text(s.model_name_hint).desired_width(f32::INFINITY));
                 });
             }
             AgentKind::Command => {
-                theme::caps(ui, "Команда", p);
-                field(ui, p, "Командная строка", Some("{image} заменится путём к скриншоту, если он есть"), |ui| {
+                theme::caps(ui, s.command, p);
+                field(ui, p, s.cmdline, Some(s.cmdline_hint), |ui| {
                     ui.add(TextEdit::singleline(&mut d.command_line).hint_text("ollama run llama3.2").desired_width(f32::INFINITY));
                 });
-                theme::hint(ui, "Каждый вопрос — новый запуск: история диалога команде не передаётся.", p);
+                theme::hint(ui, s.cmd_note, p);
             }
         }
         theme::divider(ui, p);
-        theme::caps(ui, "Ответ", p);
-        field(ui, p, "Язык ответа", Some("Подставляется в системный промпт"), |ui| {
-            ui.add(TextEdit::singleline(&mut d.answer_language).desired_width(f32::INFINITY));
+        theme::caps(ui, s.answer, p);
+        field(ui, p, s.answer_lang, Some(s.answer_lang_hint), |ui| {
+            ui.add(TextEdit::singleline(&mut d.answer_language).hint_text(self.lang.native_name()).desired_width(f32::INFINITY));
         });
-        field(ui, p, "Макс. сторона скриншота, px", None, |ui| {
+        field(ui, p, s.max_edge, None, |ui| {
             ui.add(egui::DragValue::new(&mut d.max_image_edge).range(800..=3000));
         });
     }
 
     fn settings_speech(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, "Распознавание речи", p);
-        switch_row(ui, p, "Слушать при запуске", "Сразу включать прослушивание звонка", &mut d.listen_on_start);
-        field(ui, p, "Модель Whisper", None, |ui| {
+        theme::caps(ui, s.speech_rec, p);
+        switch_row(ui, p, s.listen_start, s.listen_start_hint, &mut d.listen_on_start);
+        field(ui, p, s.whisper_model, None, |ui| {
             egui::ComboBox::from_id_salt("wm").selected_text(&d.whisper_model).show_ui(ui, |ui| {
                 for m in ["large-v3-turbo", "medium", "small", "large-v3"] {
                     ui.selectable_value(&mut d.whisper_model, m.to_string(), m);
                 }
             });
         });
-        field(ui, p, "Язык речи", None, |ui| {
+        field(ui, p, s.speech_lang, None, |ui| {
             egui::ComboBox::from_id_salt("sl").selected_text(&d.stt_language).show_ui(ui, |ui| {
-                for m in ["ru", "en", "uk", "auto"] {
+                for m in ["auto", "en", "ru", "uk"] {
                     ui.selectable_value(&mut d.stt_language, m.to_string(), m);
                 }
             });
         });
-        field(ui, p, "Устройство", Some("cuda — видеокарта NVIDIA, cpu — без неё"), |ui| {
+        field(ui, p, s.device, Some(s.device_hint), |ui| {
             egui::ComboBox::from_id_salt("dev").selected_text(&d.whisper_device).show_ui(ui, |ui| {
                 for m in ["cuda", "cpu"] {
                     ui.selectable_value(&mut d.whisper_device, m.to_string(), m);
                 }
             });
         });
-        field(ui, p, "Python", Some("Путь к python с faster-whisper"), |ui| {
+        field(ui, p, s.python, Some(s.python_hint), |ui| {
             ui.add(TextEdit::singleline(&mut d.python_path).desired_width(f32::INFINITY));
         });
         theme::divider(ui, p);
-        theme::caps(ui, "Нарезка фраз", p);
-        field(ui, p, "Порог громкости речи", None, |ui| {
+        theme::caps(ui, s.phrases, p);
+        field(ui, p, s.vad, None, |ui| {
             ui.add(egui::Slider::new(&mut d.vad_threshold, 0.001..=0.05).logarithmic(true));
         });
-        field(ui, p, "Пауза конца фразы, мс", None, |ui| {
+        field(ui, p, s.silence, None, |ui| {
             ui.add(egui::DragValue::new(&mut d.silence_ms).range(300..=3000));
         });
         theme::divider(ui, p);
-        theme::caps(ui, "Подсказка для Whisper", p);
-        theme::hint(ui, "Термины, имена и названия, которые нужно писать как есть.", p);
+        theme::caps(ui, s.whisper_prompt, p);
+        theme::hint(ui, s.whisper_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.stt_prompt).desired_rows(3).desired_width(f32::INFINITY));
-        if theme::button(ui, "Сбросить подсказку", Btn::Link, p).clicked() {
+        if theme::button(ui, s.reset_whisper_prompt, Btn::Link, p).clicked() {
             d.stt_prompt = DEFAULT_STT_PROMPT.into();
         }
     }
 
     fn settings_window_tab(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
+        let ctx = ui.ctx().clone();
+        theme::caps(ui, s.appearance, p);
+        // Language and theme apply live and are saved at once; they are not part of the draft.
+        let mut lang = self.lang;
+        if i18n::language_row(ui, &mut lang, p) {
+            self.set_language(lang);
+        }
+        let mut mode = self.cfg.theme;
+        if i18n::theme_row(ui, &mut mode, self.lang, p) {
+            self.set_theme(&ctx, mode);
+        }
+        theme::divider(ui, p);
+
+        let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, "Окно", p);
-        field(ui, p, "Монитор для скриншотов", None, |ui| {
+        theme::caps(ui, s.window, p);
+        field(ui, p, s.shot_monitor, None, |ui| {
             egui::ComboBox::from_id_salt("smon")
-                .selected_text(self.monitors.get(d.monitor_index).map(|m| m.label.clone()).unwrap_or("—".into()))
+                .selected_text(self.monitors.get(d.monitor_index).map(|m| m.label(s.monitor_primary)).unwrap_or("—".into()))
                 .show_ui(ui, |ui| {
                     for (i, m) in self.monitors.iter().enumerate() {
-                        ui.selectable_value(&mut d.monitor_index, i, &m.label);
+                        ui.selectable_value(&mut d.monitor_index, i, m.label(s.monitor_primary));
                     }
                 });
         });
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Прозрачность фона").font(theme::reg(14.0)).color(p.text));
+            ui.label(RichText::new(s.opacity).font(theme::reg(14.0)).color(p.text));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::pill(ui, &format!("{}%", (d.opacity * 100.0).round()), p));
         });
         theme::slider(ui, &mut d.opacity, 0.15, 1.0, 0.05, p);
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Масштаб текста").font(theme::reg(14.0)).color(p.text));
+            ui.label(RichText::new(s.text_size).font(theme::reg(14.0)).color(p.text));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::pill(ui, &format!("{}", d.font_size.round()), p));
         });
         theme::slider(ui, &mut d.font_size, 10.0, 22.0, 1.0, p);
     }
 
     fn settings_prompts(&mut self, ui: &mut Ui, p: &Pal) {
+        let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, "Системный промпт", p);
-        theme::hint(ui, "Как агент должен отвечать. Язык ответа добавляется автоматически.", p);
+        theme::caps(ui, s.system_prompt, p);
+        theme::hint(ui, s.system_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.system_prompt).desired_rows(12).desired_width(f32::INFINITY).font(theme::reg(13.0)));
-        if theme::button(ui, "Сбросить промпт", Btn::Link, p).clicked() {
+        if theme::button(ui, s.reset_prompt, Btn::Link, p).clicked() {
             d.system_prompt = DEFAULT_SYSTEM_PROMPT.into();
         }
     }
 
     fn settings_about(&mut self, ui: &mut Ui, p: &Pal) {
-        theme::caps(ui, "Обновления", p);
-        switch_row(
-            ui,
-            p,
-            "Проверять обновления при запуске",
-            "Узнавать о новых версиях на GitHub и обновляться через NIMVORO",
-            &mut self.draft.check_updates,
-        );
+        let s = self.s();
+        let t = nimvoro::strings(self.lang);
+        theme::caps(ui, t.updates, p);
+        switch_row(ui, p, t.check_on_start, t.check_on_start_hint, &mut self.draft.check_updates);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            theme::hint(ui, &self.updater.status_text(), p);
+            let mut status = self.updater.status_text(self.lang);
+            if matches!(self.updater.state(), UpdateState::Available { .. }) {
+                status += &format!(" · {}", t.you_have.replace("{v}", self.updater.current));
+            }
+            theme::hint(ui, &status, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let UpdateState::Available { .. } = self.updater.state() {
-                    if theme::button(ui, "Обновить", Btn::Soft, p).clicked() && self.updater.apply() {
+                    if theme::button(ui, t.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
                         self.cfg.save();
                         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     }
-                } else if !self.updater.is_checking() && theme::button(ui, "Проверить", Btn::Link, p).clicked() {
+                } else if !self.updater.is_checking() && theme::button(ui, t.check_now, Btn::Link, p).clicked() {
                     let c = ui.ctx().clone();
                     self.updater.check(move || c.request_repaint());
                 }
             });
         });
         theme::divider(ui, p);
-        theme::caps(ui, "Файлы", p);
-        theme::hint(ui, &format!("Настройки и журнал: {}", crate::config::app_dir().display()), p);
-        if theme::button(ui, "Открыть папку", Btn::Ghost, p).clicked() {
+        theme::caps(ui, s.files, p);
+        theme::hint(ui, &s.files_hint.replace("{dir}", &crate::config::app_dir().display().to_string()), p);
+        if theme::button(ui, s.open_folder, Btn::Ghost, p).clicked() {
             let _ = std::process::Command::new("explorer").arg(crate::config::app_dir()).spawn();
         }
         if !self.logs.is_empty() {
             theme::divider(ui, p);
-            theme::caps(ui, "Журнал", p);
+            theme::caps(ui, s.log, p);
             for l in self.logs.iter().rev().take(30) {
                 ui.label(RichText::new(l).font(egui::FontId::monospace(11.5)).color(p.muted));
             }
@@ -1001,7 +1105,7 @@ impl App {
             self.set_listening(true, ctx);
         }
         self.cfg.save();
-        self.log("настройки применены");
+        self.log("settings applied");
     }
 
     fn save_geometry(&mut self, ctx: &egui::Context) {
@@ -1025,7 +1129,7 @@ impl App {
     }
 }
 
-/// Черновик настроек отличается от сохранённых (без учёта положения окна).
+/// The draft differs from the saved settings (window position and size are ignored).
 fn same_config(a: &Config, b: &Config) -> bool {
     let strip = |c: &Config| {
         let mut c = c.clone();
@@ -1036,7 +1140,7 @@ fn same_config(a: &Config, b: &Config) -> bool {
     strip(a) == strip(b)
 }
 
-/// Подпись слева, элемент управления справа, подсказка под подписью.
+/// Label on the left, control on the right, hint under the label.
 fn field(ui: &mut Ui, p: &Pal, label: &str, hint: Option<&str>, add: impl FnOnce(&mut Ui)) {
     let w = ui.available_width();
     ui.horizontal(|ui| {
@@ -1056,23 +1160,23 @@ fn field(ui: &mut Ui, p: &Pal, label: &str, hint: Option<&str>, add: impl FnOnce
     ui.add_space(4.0);
 }
 
-fn effort_field(ui: &mut Ui, p: &Pal, effort: &mut String) {
-    field(ui, p, "Усилие (effort)", Some("Ниже — быстрее ответ, выше — глубже"), |ui| {
+fn effort_field(ui: &mut Ui, p: &Pal, s: &S, effort: &mut String) {
+    field(ui, p, s.effort, Some(s.effort_hint), |ui| {
         egui::ComboBox::from_id_salt("effort")
-            .selected_text(if effort.is_empty() { "по умолчанию" } else { effort.as_str() })
+            .selected_text(if effort.is_empty() { s.effort_default } else { effort.as_str() })
             .show_ui(ui, |ui| {
                 for m in ["", "low", "medium", "high", "xhigh"] {
-                    ui.selectable_value(effort, m.to_string(), if m.is_empty() { "по умолчанию" } else { m });
+                    ui.selectable_value(effort, m.to_string(), if m.is_empty() { s.effort_default } else { m });
                 }
             });
     });
 }
 
-fn key_edit(ui: &mut Ui, p: &Pal, key: &mut String, show: &mut bool) {
+fn key_edit(ui: &mut Ui, p: &Pal, s: &S, key: &mut String, show: &mut bool) {
     ui.horizontal(|ui| {
         let w = ui.available_width() - 70.0;
         ui.add(TextEdit::singleline(key).password(!*show).hint_text("sk-…").desired_width(w));
-        if theme::button(ui, if *show { "скрыть" } else { "показать" }, Btn::Link, p).clicked() {
+        if theme::button(ui, if *show { s.hide } else { s.show }, Btn::Link, p).clicked() {
             *show = !*show;
         }
     });
@@ -1096,7 +1200,7 @@ fn switch_row(ui: &mut Ui, p: &Pal, title: &str, hint: &str, value: &mut bool) -
     changed
 }
 
-/// «Таблетка» состояния с цветной точкой.
+/// Status pill with a coloured dot.
 fn chip(ui: &mut Ui, p: &Pal, dot: Color32, text: &str) -> egui::Response {
     let font = theme::reg(12.0);
     let g = ui.painter().layout_no_wrap(text.to_string(), font, p.muted);
@@ -1130,19 +1234,6 @@ fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() <= n { s.to_string() } else { s.chars().take(n).collect::<String>() + "…" }
 }
 
-/// 1 реплика, 2 реплики, 5 реплик.
-fn plural(n: usize, one: &str, few: &str, many: &str) -> String {
-    let (m10, m100) = (n % 10, n % 100);
-    let w = if m10 == 1 && m100 != 11 {
-        one
-    } else if (2..=4).contains(&m10) && !(12..=14).contains(&m100) {
-        few
-    } else {
-        many
-    };
-    format!("{n} {w}")
-}
-
 impl eframe::App for App {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 0.0]
@@ -1153,7 +1244,7 @@ impl eframe::App for App {
             self.window_ready = win::init_window(&self.title);
             self.capture_excluded = win::is_capture_excluded();
             if self.window_ready {
-                self.log(format!("окно найдено, исключено из захвата: {}", self.capture_excluded));
+                self.log(format!("window found, excluded from capture: {}", self.capture_excluded));
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
@@ -1168,7 +1259,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let p = Pal::dark();
+        let p = Pal::of(ui.visuals().dark_mode);
         let [r, g, b, _] = p.bg.to_array();
         let bg = Color32::from_rgba_unmultiplied(r, g, b, (self.cfg.opacity * 255.0) as u8);
         Frame::new()
@@ -1188,7 +1279,7 @@ impl eframe::App for App {
                 self.input_bar(ui, &p);
             });
 
-        // Уголок для изменения размера.
+        // Corner grip for resizing.
         let screen = ctx.content_rect();
         let grip = egui::Rect::from_min_size(screen.max - vec2(18.0, 18.0), vec2(18.0, 18.0));
         let resp = ui.interact(grip, egui::Id::unique("grip"), Sense::drag());

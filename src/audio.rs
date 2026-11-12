@@ -56,7 +56,7 @@ fn run(
     let host = cpal::default_host();
     let dev = host
         .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("нет устройства вывода звука"))?;
+        .ok_or_else(|| anyhow::anyhow!("no audio output device"))?;
     let name = dev.description().map(|d| d.to_string()).unwrap_or_default();
     let sup = dev.default_output_config()?;
     let channels = sup.channels() as usize;
@@ -67,7 +67,7 @@ fn run(
     let (raw_tx, raw_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
     let err_ev = ev.clone();
     let err_cb = move |e: cpal::Error| {
-        let _ = err_ev.send(Event::Log(format!("звук (предупреждение): {e}")));
+        let _ = err_ev.send(Event::Log(format!("audio (warning): {e}")));
     };
     let stream = match fmt {
         cpal::SampleFormat::F32 => dev.build_input_stream::<f32, _, _>(
@@ -86,11 +86,11 @@ fn run(
             err_cb,
             None,
         )?,
-        other => anyhow::bail!("неподдерживаемый формат звука: {other:?}"),
+        other => anyhow::bail!("unsupported audio format: {other:?}"),
     };
     stream.play()?;
     let _ = ev.send(Event::Log(format!(
-        "звук: loopback «{name}», {in_sr} Гц, {channels} кан."
+        "audio: loopback \"{name}\", {in_sr} Hz, {channels} ch."
     )));
 
     let mut rs = Resampler::new(in_sr, SR);

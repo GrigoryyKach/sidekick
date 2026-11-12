@@ -45,7 +45,7 @@ pub fn resolve_claude(custom: &str) -> Option<PathBuf> {
 impl Claude {
     pub fn start(cfg: &Config, ev: Sender<Event>, ctx: eframe::egui::Context) -> anyhow::Result<Self> {
         let exe = resolve_claude(&cfg.claude_path)
-            .ok_or_else(|| anyhow::anyhow!("не найден Claude Code (claude.exe). Укажите путь в настройках"))?;
+            .ok_or_else(|| anyhow::anyhow!("Claude Code (claude.exe) not found: set the path in the settings"))?;
         let dir = app_dir().join("claude_cwd");
         let _ = std::fs::create_dir_all(&dir);
         let prompt_file = app_dir().join("system_prompt.txt");
@@ -81,7 +81,7 @@ impl Claude {
             .stderr(Stdio::piped())
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
-            .map_err(|e| anyhow::anyhow!("запуск {}: {e}", exe.display()))?;
+            .map_err(|e| anyhow::anyhow!("could not run {}: {e}", exe.display()))?;
         let stdin = child.stdin.take().unwrap();
 
         let stdout = child.stdout.take().unwrap();

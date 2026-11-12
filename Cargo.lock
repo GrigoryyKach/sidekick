@@ -905,6 +905,7 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "web-time",
+ "webbrowser",
  "windows-sys 0.61.2",
  "winit",
 ]
@@ -3225,6 +3226,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sidekick"
+version = "1.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "cpal",
+ "crossbeam-channel",
+ "dirs",
+ "eframe",
+ "egui_commonmark",
+ "image",
+ "parking_lot 0.13.0",
+ "serde",
+ "serde_json",
+ "ureq",
+ "windows",
+ "xcap",
+]
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3577,26 +3598,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
-]
-
-[[package]]
-name = "transluent"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "base64",
- "cpal",
- "crossbeam-channel",
- "dirs",
- "eframe",
- "egui_commonmark",
- "image",
- "parking_lot 0.13.0",
- "serde",
- "serde_json",
- "ureq",
- "windows",
- "xcap",
 ]
 
 [[package]]
@@ -3990,6 +3991,22 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webbrowser"
+version = "1.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe8d20d0214027baf11b8b0cc307c1da7657d8f4db9aa956f7de27a6fb1acbd5"
+dependencies = [
+ "jni",
+ "log",
+ "ndk-context",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "url",
+ "web-sys",
 ]
 
 [[package]]

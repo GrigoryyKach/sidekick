@@ -1,7 +1,7 @@
-// Вшивает в transluent.exe иконку (assets/icon.ico, рисуется nimvoro/tools/make-icons.js) и сведения о версии,
-// чтобы в Проводнике и на панели задач было «transluent» со своим значком.
-// MSVC-тулчейн: нужен rc.exe из Windows SDK, GNU-тулчейн: windres из MinGW.
-// Если инструмента нет — сборка продолжается без ресурсов.
+// Embeds the icon (assets/icon.ico, drawn by nimvoro/tools/make-icons.js) and version info into Sidekick.exe,
+// so Explorer and the taskbar show "Sidekick" with its own icon.
+// MSVC toolchain: needs rc.exe from the Windows SDK; GNU toolchain: windres from MinGW.
+// If the tool is missing, the build goes on without resources.
 
 use std::path::{Path, PathBuf};
 
@@ -50,12 +50,12 @@ BEGIN
   BEGIN
     BLOCK "041904B0"
     BEGIN
-      VALUE "FileDescription", "transluent"
-      VALUE "ProductName", "transluent"
+      VALUE "FileDescription", "Sidekick"
+      VALUE "ProductName", "Sidekick"
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
-      VALUE "OriginalFilename", "transluent.exe"
-      VALUE "InternalName", "transluent"
+      VALUE "OriginalFilename", "Sidekick.exe"
+      VALUE "InternalName", "Sidekick"
     END
   END
   BLOCK "VarFileInfo"
@@ -71,14 +71,14 @@ END
     if msvc {
         let res = out.join("app.res");
         let Some(rc) = find_rc() else {
-            println!("cargo:warning=rc.exe не найден — exe соберётся без иконки и сведений о версии");
+            println!("cargo:warning=rc.exe not found: the exe will be built without an icon and version info");
             return;
         };
         let ok = std::process::Command::new(&rc).args(["/nologo", "/fo"]).arg(&res).arg(&rc_path).status().is_ok_and(|s| s.success());
         if ok && Path::new(&res).exists() {
             println!("cargo:rustc-link-arg-bins={}", res.display());
         } else {
-            println!("cargo:warning=rc.exe не смог собрать ресурсы — exe будет без иконки");
+            println!("cargo:warning=rc.exe failed to build the resources: the exe will have no icon");
         }
     } else {
         let obj = out.join("app_res.o");
@@ -94,7 +94,7 @@ END
         if ok && Path::new(&obj).exists() {
             println!("cargo:rustc-link-arg-bins={}", obj.display());
         } else {
-            println!("cargo:warning=windres не найден или не сработал — exe соберётся без иконки и сведений о версии");
+            println!("cargo:warning=windres not found or failed: the exe will be built without an icon and version info");
         }
     }
 }

@@ -1,7 +1,7 @@
 name: Release
 
-# Собирает Windows-сборку и публикует GitHub Release при пуше тега vX.Y.Z.
-# Лаунчер NIMVORO скачивает из релиза архив Transluent-win-x64.zip (имя задано в nimvoro.json).
+# Builds the Windows binary and publishes a GitHub Release when a vX.Y.Z tag is pushed.
+# The NIMVORO launcher downloads Sidekick-win-x64.zip from the release (name set in nimvoro.json).
 on:
   push:
     tags: ["v*"]
@@ -16,38 +16,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Версия совпадает с тегом
+      - name: Version matches the tag
         shell: pwsh
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
           "VERSION=$v" >> $env:GITHUB_ENV
           if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$v") {
-            throw "Тег ${{ github.ref_name }} не совпадает с версией $v"
+            throw "Tag ${{ github.ref_name }} does not match version $v"
           }
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Тесты
+      - name: Tests
         run: cargo test --release
 
-      - name: Сборка
+      - name: Build
         run: cargo build --release
 
-      - name: Архив
+      - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pkg | Out-Null
-          Copy-Item target/release/transluent.exe pkg/
+          Copy-Item target/release/Sidekick.exe pkg/
           Copy-Item stt_server.py, README.md pkg/
-          Compress-Archive -Path pkg/* -DestinationPath Transluent-win-x64.zip -Force
+          Compress-Archive -Path pkg/* -DestinationPath Sidekick-win-x64.zip -Force
 
-      - name: Публикация релиза
+      - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
           if ($tag -notmatch '^v') { $tag = "v$env:VERSION" }
-          gh release create $tag "Transluent-win-x64.zip" --title "transluent $tag" --generate-notes --verify-tag
+          gh release create $tag "Sidekick-win-x64.zip" --title "Sidekick $tag" --generate-notes --verify-tag

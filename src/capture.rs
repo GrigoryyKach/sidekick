@@ -5,7 +5,20 @@ use std::io::Cursor;
 
 #[derive(Clone, Debug)]
 pub struct MonitorInfo {
-    pub label: String,
+    pub index: usize,
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub primary: bool,
+}
+
+impl MonitorInfo {
+    /// Label for lists; `primary` is the localized word for the main monitor.
+    pub fn label(&self, primary: &str) -> String {
+        let tail = if self.primary { format!(", {primary}") } else { String::new() };
+        format!("{}: {}×{} @({},{}){}", self.index + 1, self.width, self.height, self.x, self.y, tail)
+    }
 }
 
 pub fn list_monitors() -> Vec<MonitorInfo> {
@@ -17,10 +30,7 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
             let h = m.height().unwrap_or(0);
             let x = m.x().unwrap_or(0);
             let y = m.y().unwrap_or(0);
-            let primary = if m.is_primary().unwrap_or(false) { ", основной" } else { "" };
-            MonitorInfo {
-                label: format!("{}: {}×{} @({x},{y}){primary}", i + 1, w, h),
-            }
+            MonitorInfo { index: i, width: w, height: h, x, y, primary: m.is_primary().unwrap_or(false) }
         })
         .collect()
 }
@@ -31,8 +41,8 @@ pub fn capture_png_b64(index: usize, max_edge: u32) -> Result<String> {
     let m = all
         .get(index)
         .or_else(|| all.first())
-        .context("мониторы не найдены")?;
-    let img = m.capture_image().map_err(|e| anyhow!("захват экрана: {e}"))?;
+        .context("no monitors found")?;
+    let img = m.capture_image().map_err(|e| anyhow!("screen capture: {e}"))?;
     let mut img = DynamicImage::ImageRgba8(img).to_rgb8();
     let (w, h) = img.dimensions();
     let long = w.max(h);

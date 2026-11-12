@@ -1,10 +1,10 @@
-//! Агенты, которые отвечают на вопросы. Все шлют одни и те же события
-//! (`AgentReady` / `AgentDelta` / `AgentDone` / `AgentExited`), поэтому интерфейсу всё равно, кто отвечает.
+//! Agents that answer the questions. They all send the same events
+//! (`AgentReady` / `AgentDelta` / `AgentDone` / `AgentExited`), so the interface does not care who answers.
 //!
-//! - Claude Code — постоянный процесс `claude -p` (см. `claude.rs`).
-//! - Anthropic API — Messages API по ключу, потоковый ответ (SSE).
-//! - OpenAI-совместимый — `/chat/completions` с `stream: true` (OpenAI, OpenRouter, Ollama, LM Studio, vLLM…).
-//! - Своя команда — на каждый вопрос запускается команда, вопрос уходит в stdin, stdout показывается как ответ.
+//! - Claude Code: a persistent `claude -p` process (see `claude.rs`).
+//! - Anthropic API: Messages API with a key, streamed answer (SSE).
+//! - OpenAI-compatible: `/chat/completions` with `stream: true` (OpenAI, OpenRouter, Ollama, LM Studio, vLLM...).
+//! - Custom command: the command runs for every question, the question goes to stdin, stdout is shown as the answer.
 
 use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, app_dir};
 use crate::events::Event;
@@ -19,9 +19,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 pub trait Agent: Send {
-    /// `false` — агент умер и его нужно перезапустить.
+    /// `false` means the agent died and has to be restarted.
     fn alive(&mut self) -> bool;
-    /// Отправить вопрос. Ответ придёт событиями.
+    /// Sends a question. The answer arrives as events.
     fn send(&mut self, text: &str, image_png_b64: Option<&str>) -> anyhow::Result<()>;
 }
 
@@ -35,9 +35,9 @@ pub fn start(cfg: &Config, ev: Sender<Event>, ctx: egui::Context) -> anyhow::Res
     }
 }
 
-// ───────────────────────── общий фоновый исполнитель ─────────────────────────
+// ───────────────────────── shared background worker ─────────────────────────
 
-/// Вопросы выполняются по очереди в отдельном потоке, чтобы ответы не перемешивались.
+/// Questions run one at a time on a separate thread so that answers do not get mixed up.
 struct Worker {
     jobs: Sender<(String, Option<String>)>,
 }
@@ -61,7 +61,7 @@ impl Worker {
                 };
                 match res {
                     Ok(full) => emit(Event::AgentDone { text: full, is_error: false }),
-                    Err(e) => emit(Event::AgentDone { text: format!("Ошибка: {e}"), is_error: true }),
+                    Err(e) => emit(Event::AgentDone { text: format!("Error: {e}"), is_error: true }),
                 }
             }
         });
@@ -77,7 +77,7 @@ impl Agent for Worker {
     fn send(&mut self, text: &str, image_png_b64: Option<&str>) -> anyhow::Result<()> {
         self.jobs
             .send((text.to_string(), image_png_b64.map(str::to_string)))
-            .map_err(|_| anyhow::anyhow!("агент остановлен"))
+            .map_err(|_| anyhow::anyhow!("the agent was stopped"))
     }
 }
 
@@ -115,16 +115,16 @@ impl Backend {
             AgentKind::Anthropic => {
                 let key = key("ANTHROPIC_API_KEY");
                 if key.is_empty() {
-                    anyhow::bail!("нет ключа Anthropic API: укажите его в настройках или в ANTHROPIC_API_KEY");
+                    anyhow::bail!("no Anthropic API key: set it in the settings or in ANTHROPIC_API_KEY");
                 }
                 let model = if cfg.api_model.trim().is_empty() { DEFAULT_ANTHROPIC_MODEL.into() } else { cfg.api_model.trim().into() };
                 Ok(Backend::Anthropic(Http { base: base(DEFAULT_ANTHROPIC_URL), key, model, effort: cfg.effort.trim().into(), agent }))
             }
             AgentKind::OpenAi => {
                 if cfg.api_model.trim().is_empty() {
-                    anyhow::bail!("укажите модель в настройках агента");
+                    anyhow::bail!("set the model in the agent settings");
                 }
-                // Ключ необязателен: локальным Ollama / LM Studio он не нужен.
+                // The key is optional: local Ollama / LM Studio do not need one.
                 Ok(Backend::OpenAi(Http {
                     base: base(DEFAULT_OPENAI_URL),
                     key: key("OPENAI_API_KEY"),
@@ -135,7 +135,7 @@ impl Backend {
             }
             AgentKind::Command => {
                 if cfg.command_line.trim().is_empty() {
-                    anyhow::bail!("укажите команду агента в настройках");
+                    anyhow::bail!("set the agent command in the settings");
                 }
                 Ok(Backend::Command(cfg.command_line.trim().into()))
             }
@@ -144,7 +144,7 @@ impl Backend {
     }
 }
 
-/// Читает Server-Sent Events: для каждого `data:` вызывает `on_data`. `false` из `on_data` — остановиться.
+/// Reads Server-Sent Events and calls `on_data` for every `data:` line. `on_data` returns `false` to stop.
 fn read_sse(body: impl Read, mut on_data: impl FnMut(&str) -> anyhow::Result<bool>) -> anyhow::Result<()> {
     for line in BufReader::new(body).lines() {
         let line = line?;
@@ -168,7 +168,7 @@ fn http_error(status: u16, body: &str) -> anyhow::Error {
 // ───────────────────────── Anthropic Messages API ─────────────────────────
 
 impl Http {
-    /// Anthropic: история хранится целиком, вместе с блоками размышлений, как пришла от API.
+    /// Anthropic: the whole history is kept, including thinking blocks, exactly as the API returned it.
     fn ask_anthropic(
         &self,
         system: &str,
@@ -194,7 +194,7 @@ impl Http {
         if !self.effort.is_empty() {
             body["output_config"] = json!({"effort": self.effort});
         }
-        // Если модель откажется отвечать по соображениям безопасности, API сам повторит запрос на запасной модели.
+        // If the model declines for safety reasons, the API retries the request on a fallback model itself.
         let fallback = self.model.starts_with("claude-");
         if fallback {
             body["fallbacks"] = json!("default");
@@ -225,7 +225,7 @@ impl Http {
             return Err(http_error(status, &s));
         }
 
-        // Собираем блоки ответа из дельт, чтобы вернуть их в историю без изменений.
+        // Collect the answer blocks from the deltas so they can go back into the history unchanged.
         let mut blocks: Vec<Value> = vec![];
         let mut full = String::new();
         let mut stop_reason = String::new();
@@ -264,7 +264,7 @@ impl Http {
                         stop_reason = s.to_string();
                     }
                 }
-                "error" => anyhow::bail!("{}", v["error"]["message"].as_str().unwrap_or("ошибка API")),
+                "error" => anyhow::bail!("{}", v["error"]["message"].as_str().unwrap_or("API error")),
                 "message_stop" => return Ok(false),
                 _ => {}
             }
@@ -281,12 +281,12 @@ impl Http {
             history.pop();
         }
         if stop_reason == "refusal" {
-            anyhow::bail!("модель отказалась отвечать на этот запрос");
+            anyhow::bail!("the model declined to answer this request");
         }
         Ok(full)
     }
 
-    /// OpenAI-совместимый `/chat/completions`. В историю идёт только текст.
+    /// OpenAI-compatible `/chat/completions`. Only text goes into the history.
     fn ask_openai(
         &self,
         system: &str,
@@ -357,10 +357,10 @@ fn append_str(block: &mut Value, key: &str, add: &str) {
     block[key] = Value::String(cur + add);
 }
 
-// ───────────────────────── своя команда ─────────────────────────
+// ───────────────────────── custom command ─────────────────────────
 
-/// Запускает команду через `cmd /C`, пишет в stdin системный промпт и вопрос, читает stdout как ответ.
-/// Если в команде есть `{image}`, туда подставляется путь к PNG со скриншотом.
+/// Runs the command through `cmd /C`, writes the system prompt and the question to stdin, reads stdout as the answer.
+/// If the command contains `{image}`, the path to the PNG screenshot is substituted there.
 fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &dyn Fn(Event)) -> anyhow::Result<String> {
     let mut line = line.to_string();
     if line.contains("{image}") {
@@ -383,7 +383,7 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("запуск «{line}»: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not run \"{line}\": {e}"))?;
     {
         let mut stdin = child.stdin.take().unwrap();
         let prompt = format!("{system}\n\n{text}\n");
@@ -405,7 +405,7 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
             break;
         }
         pending.extend_from_slice(&buf[..n]);
-        // Отдаём только целые UTF-8 символы.
+        // Pass on whole UTF-8 characters only.
         let valid = match std::str::from_utf8(&pending) {
             Ok(_) => pending.len(),
             Err(e) => e.valid_up_to(),
@@ -420,7 +420,7 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
     let status = child.wait()?;
     let err = err_thread.join().unwrap_or_default();
     if !status.success() && full.trim().is_empty() {
-        anyhow::bail!("команда завершилась с кодом {:?}\n```\n{}\n```", status.code(), err.trim());
+        anyhow::bail!("the command exited with code {:?}\n```\n{}\n```", status.code(), err.trim());
     }
     Ok(full)
 }

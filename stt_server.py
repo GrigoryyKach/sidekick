@@ -85,7 +85,7 @@ def main():
         # Warm-up: forces CUDA libraries to load now instead of on the first phrase.
         list(model.transcribe(np.zeros(16000, dtype=np.float32), language=lang or "en")[0])
     except Exception as e:  # fall back to CPU
-        out({"type": "log", "text": f"CUDA недоступна ({e}), переключаюсь на CPU"})
+        out({"type": "log", "text": f"CUDA is unavailable ({e}), falling back to CPU"})
         device = "cpu"
         model = WhisperModel(args.model, device="cpu", compute_type="int8")
     out({"type": "ready", "device": device, "model": args.model, "load_s": round(time.time() - t0, 1)})
@@ -121,7 +121,7 @@ def main():
                 out({"type": "text", "text": text, "audio_s": round(len(audio) / 16000, 1),
                      "took_s": round(time.time() - t, 2)})
         except Exception as e:
-            out({"type": "log", "text": f"ошибка распознавания: {e}"})
+            out({"type": "log", "text": f"recognition error: {e}"})
 
 
 if __name__ == "__main__":

@@ -1,8 +1,13 @@
 [package]
-name = "transluent"
-version = "1.0.0"
+name = "sidekick"
+version = "1.1.0"
 edition = "2024"
 build = "build.rs"
+description = "Invisible AI assistant for calls: hidden from screen sharing"
+
+[[bin]]
+name = "Sidekick"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -10,7 +15,7 @@ base64 = "0.23.1"
 cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 dirs = "7.0.0"
-eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "clipboard"] }
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "clipboard", "links"] }
 egui_commonmark = "0.26.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 parking_lot = "0.13.0"

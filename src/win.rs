@@ -34,7 +34,7 @@ pub fn init_window(title: &str) -> bool {
     HWND_VAL.store(h.0 as isize, Ordering::Relaxed);
     unsafe {
         // Excluded from screen capture / screen sharing (Windows 10 2004+).
-        if std::env::var_os("TRANSLUENT_SHOW_IN_CAPTURE").is_none() {
+        if std::env::var_os("SIDEKICK_SHOW_IN_CAPTURE").is_none() {
             let _ = SetWindowDisplayAffinity(h, WDA_EXCLUDEFROMCAPTURE);
         }
         // Tool window: no taskbar button, not in Alt+Tab.
@@ -101,15 +101,16 @@ const KEYS: &[(i32, u32, Hotkey)] = &[
     (14, 0x34, Hotkey::Monitor(3)),   // 4
 ];
 
-pub const HOTKEY_HELP: &[(&str, &str)] = &[
-    ("Ctrl+Shift+Space", "спросить: экран + речь"),
-    ("Ctrl+Shift+Enter", "спросить: только речь"),
-    ("Ctrl+Shift+H", "скрыть / показать окно"),
-    ("Ctrl+Shift+T", "сквозные клики вкл/выкл"),
-    ("Ctrl+Shift+L", "прослушивание вкл/выкл"),
-    ("Ctrl+Shift+N", "новый диалог"),
-    ("Ctrl+Shift+PgUp/PgDn", "прокрутка ответа"),
-    ("Ctrl+Shift+1..4", "выбрать монитор"),
+/// Key combinations shown in the help card; the descriptions live in `strings.rs`, in the same order.
+pub const HOTKEY_KEYS: [&str; 8] = [
+    "Ctrl+Shift+Space",
+    "Ctrl+Shift+Enter",
+    "Ctrl+Shift+H",
+    "Ctrl+Shift+T",
+    "Ctrl+Shift+L",
+    "Ctrl+Shift+N",
+    "Ctrl+Shift+PgUp/PgDn",
+    "Ctrl+Shift+1..4",
 ];
 
 /// Registers global hotkeys on a dedicated thread with its own message loop.
@@ -123,7 +124,7 @@ pub fn spawn_hotkeys(tx: Sender<Event>, ctx: eframe::egui::Context) {
         }
         if !failed.is_empty() {
             let _ = tx.send(Event::Log(format!(
-                "не удалось зарегистрировать горячие клавиши (заняты другим приложением): {failed:?}"
+                "could not register hotkeys (taken by another application): {failed:?}"
             )));
         }
         let mut msg = MSG::default();

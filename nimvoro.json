@@ -1,32 +1,32 @@
 {
   "schema": 1,
-  "id": "transluent",
-  "name": "transluent",
-  "tagline": "Невидимый ИИ-ассистент для созвонов",
-  "description": "Полупрозрачное окно поверх всех, которое не видно при демонстрации экрана. Слушает собеседников, распознаёт речь локально через Whisper и по горячей клавише отправляет вопрос со скриншотом выбранному ИИ-агенту.",
+  "id": "sidekick",
+  "name": "Sidekick",
+  "tagline": "An invisible AI assistant for calls",
+  "description": "A translucent always-on-top window that stays out of screen sharing. It listens to the other participants, recognises their speech locally with Whisper, and on a hotkey sends your question with a screenshot to the AI agent of your choice.",
   "features": [
     {
-      "title": "Скрыто от записи экрана",
-      "text": "Окно не попадает в демонстрацию экрана, на панель задач и в Alt+Tab."
+      "title": "Hidden from screen capture",
+      "text": "The window does not appear in screen sharing, on the taskbar or in Alt+Tab."
     },
     {
-      "title": "Свой агент",
-      "text": "Claude Code, Anthropic API, любой OpenAI-совместимый сервер (OpenAI, OpenRouter, Ollama, LM Studio) или своя консольная команда."
+      "title": "Your own agent",
+      "text": "Claude Code, the Anthropic API, any OpenAI-compatible server (OpenAI, OpenRouter, Ollama, LM Studio) or your own console command."
     },
     {
-      "title": "Локальное распознавание речи",
-      "text": "faster-whisper на видеокарте слушает системный звук, микрофон не захватывается."
+      "title": "Local speech recognition",
+      "text": "faster-whisper on your GPU listens to the system audio; the microphone is never captured."
     },
     {
-      "title": "Скриншот + контекст",
-      "text": "Ctrl+Shift+Space отправляет снимок выбранного монитора и новые реплики собеседника."
+      "title": "Screenshot + context",
+      "text": "Ctrl+Shift+Space sends a snapshot of the chosen monitor together with the latest lines from the other participants."
     },
     {
-      "title": "Управление с клавиатуры",
-      "text": "Скрыть окно, сквозные клики, прокрутка ответа и выбор монитора — горячими клавишами."
+      "title": "Keyboard control",
+      "text": "Hide the window, click-through mode, scrolling the answer and picking a monitor all have hotkeys."
     }
   ],
-  "category": "ИИ",
+  "category": "AI",
   "accent": [
     "#4f6bff",
     "#8a5bff"
@@ -37,12 +37,78 @@
     "assets/screenshots/2.png",
     "assets/screenshots/3.png"
   ],
-  "exe": "transluent.exe",
-  "asset": "Transluent-win-x64.zip",
+  "exe": "Sidekick.exe",
+  "asset": "Sidekick-win-x64.zip",
   "requirements": [
     "Windows 10 2004+ / 11 x64",
-    "Для распознавания речи: Python с faster-whisper (GPU NVIDIA или CPU)",
-    "Агент: Claude Code, ключ API или локальная модель"
+    "For speech recognition: Python with faster-whisper (NVIDIA GPU or CPU)",
+    "An agent: Claude Code, an API key or a local model"
   ],
-  "settingsDir": "%APPDATA%\\transluent"
+  "settingsDir": "%APPDATA%\\Sidekick",
+  "i18n": {
+    "ru": {
+      "tagline": "Невидимый ИИ-ассистент для созвонов",
+      "description": "Полупрозрачное окно поверх всех, которое не видно при демонстрации экрана. Слушает собеседников, распознаёт речь локально через Whisper и по горячей клавише отправляет вопрос со скриншотом выбранному ИИ-агенту.",
+      "category": "ИИ",
+      "features": [
+        {
+          "title": "Скрыто от записи экрана",
+          "text": "Окно не попадает в демонстрацию экрана, на панель задач и в Alt+Tab."
+        },
+        {
+          "title": "Свой агент",
+          "text": "Claude Code, Anthropic API, любой OpenAI-совместимый сервер (OpenAI, OpenRouter, Ollama, LM Studio) или своя консольная команда."
+        },
+        {
+          "title": "Локальное распознавание речи",
+          "text": "faster-whisper на видеокарте слушает системный звук, микрофон не захватывается."
+        },
+        {
+          "title": "Скриншот + контекст",
+          "text": "Ctrl+Shift+Space отправляет снимок выбранного монитора и новые реплики собеседников."
+        },
+        {
+          "title": "Управление с клавиатуры",
+          "text": "Скрыть окно, сквозные клики, прокрутка ответа и выбор монитора — горячими клавишами."
+        }
+      ],
+      "requirements": [
+        "Windows 10 2004+ / 11 x64",
+        "Для распознавания речи: Python с faster-whisper (видеокарта NVIDIA или процессор)",
+        "Агент: Claude Code, ключ API или локальная модель"
+      ]
+    },
+    "uk": {
+      "tagline": "Невидимий ШІ-асистент для дзвінків",
+      "description": "Напівпрозоре вікно поверх усіх, яке не видно під час демонстрації екрана. Слухає співрозмовників, розпізнає мовлення локально через Whisper і за гарячою клавішею надсилає запитання зі знімком екрана вибраному ШІ-агенту.",
+      "category": "ШІ",
+      "features": [
+        {
+          "title": "Приховано від запису екрана",
+          "text": "Вікно не потрапляє в демонстрацію екрана, на панель завдань і в Alt+Tab."
+        },
+        {
+          "title": "Власний агент",
+          "text": "Claude Code, Anthropic API, будь-який сервер, сумісний з OpenAI (OpenAI, OpenRouter, Ollama, LM Studio), або власна консольна команда."
+        },
+        {
+          "title": "Локальне розпізнавання мовлення",
+          "text": "faster-whisper на відеокарті слухає системний звук, мікрофон не захоплюється."
+        },
+        {
+          "title": "Знімок екрана + контекст",
+          "text": "Ctrl+Shift+Space надсилає знімок вибраного монітора й нові репліки співрозмовників."
+        },
+        {
+          "title": "Керування з клавіатури",
+          "text": "Сховати вікно, наскрізні кліки, прокручування відповіді та вибір монітора — гарячими клавішами."
+        }
+      ],
+      "requirements": [
+        "Windows 10 2004+ / 11 x64",
+        "Для розпізнавання мовлення: Python із faster-whisper (відеокарта NVIDIA або процесор)",
+        "Агент: Claude Code, ключ API або локальна модель"
+      ]
+    }
+  }
 }

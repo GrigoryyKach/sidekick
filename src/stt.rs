@@ -49,7 +49,7 @@ pub fn start(
     ev: Sender<Event>,
     ctx: eframe::egui::Context,
 ) -> anyhow::Result<Stt> {
-    let script = find_script().ok_or_else(|| anyhow::anyhow!("не найден stt_server.py"))?;
+    let script = find_script().ok_or_else(|| anyhow::anyhow!("stt_server.py not found"))?;
     let mut child = Command::new(python)
         .arg("-u")
         .arg(&script)
@@ -61,7 +61,7 @@ pub fn start(
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| anyhow::anyhow!("не удалось запустить {python}: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not run {python}: {e}"))?;
 
     let mut stdin = child.stdin.take().unwrap();
     std::thread::spawn(move || {
@@ -85,18 +85,17 @@ pub fn start(
             let s = |k: &str| v[k].as_str().unwrap_or_default().to_string();
             let e = match v["type"].as_str() {
                 Some("text") => Event::Transcript(s("text")),
-                Some("ready") => Event::SttReady(format!(
-                    "Whisper {} на {} (загрузка {} с)",
-                    s("model"),
-                    s("device").to_uppercase(),
-                    v["load_s"]
-                )),
+                Some("ready") => Event::SttReady {
+                    model: s("model"),
+                    device: s("device").to_uppercase(),
+                    load_s: v["load_s"].to_string(),
+                },
                 _ => Event::Log(format!("stt: {}", s("text"))),
             };
             let _ = ev2.send(e);
             ctx2.request_repaint();
         }
-        let _ = ev2.send(Event::SttStopped("процесс распознавания завершился".into()));
+        let _ = ev2.send(Event::SttStopped("the recognition process exited".into()));
         ctx2.request_repaint();
     });
 
