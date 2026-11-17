@@ -8,6 +8,7 @@ use crate::i18n::{self, Lang};
 use crate::nimvoro::{self, UpdateState, Updater};
 use crate::stt::{self, Stt};
 use crate::strings::{S, TABLE};
+use crate::support;
 use crate::theme::{self, Btn, Pal, Textures, ThemeMode};
 use crate::win;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -1106,6 +1107,8 @@ impl App {
                 }
             });
         });
+        theme::divider(ui, p);
+        support::support_section(ui, self.lang);
         theme::divider(ui, p);
         theme::caps(ui, s.files, p);
         theme::hint(ui, &s.files_hint.replace("{dir}", &crate::config::app_dir().display().to_string()), p);

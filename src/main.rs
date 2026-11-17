@@ -12,6 +12,7 @@ mod i18n;
 mod nimvoro;
 mod stt;
 mod strings;
+mod support;
 // Shared with the other NIMVORO tools: some of its widgets are not used here.
 #[allow(dead_code)]
 mod theme;
