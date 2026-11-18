@@ -609,7 +609,9 @@ impl App {
             if theme::button(ui, s.btn_screen, Btn::Soft, p).on_hover_text("Ctrl+Shift+Space").clicked() {
                 self.ask(true, None, &ctx);
             }
-            if theme::button(ui, s.btn_speech, Btn::Ghost, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
+            // The speech-balloon emoji has no glyph in the Linux fallback fonts; the microphone does.
+            let speech_label = if cfg!(windows) { s.btn_speech.to_string() } else { s.btn_speech.replace('💬', "🎙") };
+            if theme::button(ui, &speech_label, Btn::Ghost, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
                 self.ask(false, None, &ctx);
             }
             egui::ComboBox::from_id_salt("mon")
