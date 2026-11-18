@@ -3,10 +3,12 @@
 
 use crate::config::{Config, app_dir};
 use crate::events::Event;
+#[cfg(windows)]
 use crate::stt::CREATE_NO_WINDOW;
 use crossbeam_channel::Sender;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -28,17 +30,30 @@ pub fn resolve_claude(custom: &str) -> Option<PathBuf> {
     }
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {
-        // npm install: claude.cmd is a wrapper around the native binary.
-        let native = dir.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe");
-        if dir.join("claude.cmd").exists() && native.exists() {
-            return Some(native);
+        #[cfg(windows)]
+        {
+            // npm install: claude.cmd is a wrapper around the native binary.
+            let native = dir.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+            if dir.join("claude.cmd").exists() && native.exists() {
+                return Some(native);
+            }
+            let exe = dir.join("claude.exe");
+            if exe.exists() {
+                return Some(exe);
+            }
         }
-        let exe = dir.join("claude.exe");
-        if exe.exists() {
-            return Some(exe);
+        #[cfg(not(windows))]
+        {
+            let exe = dir.join("claude");
+            if exe.is_file() {
+                return Some(exe);
+            }
         }
     }
+    #[cfg(windows)]
     let local = dirs::home_dir()?.join(".local/bin/claude.exe");
+    #[cfg(not(windows))]
+    let local = dirs::home_dir()?.join(".local/bin/claude");
     local.exists().then_some(local)
 }
 
@@ -74,12 +89,13 @@ impl Claude {
         if !cfg.effort.trim().is_empty() {
             cmd.args(["--effort", cfg.effort.trim()]);
         }
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
         let mut child = cmd
             .current_dir(&dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| crate::errors::AppError::with(crate::errors::Kind::RunFailed(exe.display().to_string()), e))?;
         let stdin = child.stdin.take().unwrap();

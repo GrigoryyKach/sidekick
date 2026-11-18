@@ -21,6 +21,10 @@ impl MonitorInfo {
     }
 }
 
+#[cfg(not(windows))]
+pub use crate::capture_linux::list_monitors;
+
+#[cfg(windows)]
 pub fn list_monitors() -> Vec<MonitorInfo> {
     let Ok(all) = xcap::Monitor::all() else { return vec![] };
     all.iter()
@@ -35,15 +39,28 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
         .collect()
 }
 
-/// Captures a monitor and returns a base64 PNG (downscaled so the long edge <= max_edge).
-pub fn capture_png_b64(index: usize, max_edge: u32) -> Result<String> {
+#[cfg(windows)]
+fn grab(index: usize) -> Result<image::RgbImage> {
     let all = xcap::Monitor::all().map_err(|e| crate::errors::AppError::with(crate::errors::Kind::CaptureFailed, e))?;
     let m = all
         .get(index)
         .or_else(|| all.first())
         .ok_or_else(|| crate::errors::AppError::new(crate::errors::Kind::NoMonitors))?;
     let img = m.capture_image().map_err(|e| crate::errors::AppError::with(crate::errors::Kind::CaptureFailed, e))?;
-    let mut img = DynamicImage::ImageRgba8(img).to_rgb8();
+    Ok(DynamicImage::ImageRgba8(img).to_rgb8())
+}
+
+#[cfg(not(windows))]
+fn grab(index: usize) -> Result<image::RgbImage> {
+    crate::capture_linux::grab(index).map_err(|e| match e.downcast::<crate::errors::AppError>() {
+        Ok(app) => anyhow::Error::new(app),
+        Err(e) => crate::errors::AppError::with(crate::errors::Kind::CaptureFailed, format!("{e:#}")),
+    })
+}
+
+/// Captures a monitor and returns a base64 PNG (downscaled so the long edge <= max_edge).
+pub fn capture_png_b64(index: usize, max_edge: u32) -> Result<String> {
+    let mut img = grab(index)?;
     let (w, h) = img.dimensions();
     let long = w.max(h);
     if long > max_edge {

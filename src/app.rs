@@ -646,7 +646,11 @@ impl App {
             if self.capture_excluded || self.demo {
                 chip(ui, p, OK, s.chip_hidden);
             } else {
-                chip(ui, p, WARN, s.chip_visible);
+                let r = chip(ui, p, WARN, s.chip_visible);
+                if cfg!(not(windows)) {
+                    // Linux has no way to exclude a window from screen capture.
+                    r.on_hover_text(s.chip_linux_tip);
+                }
             }
             let col = match self.agent_state {
                 AgentState::Ready => OK,
@@ -1113,7 +1117,8 @@ impl App {
         theme::caps(ui, s.files, p);
         theme::hint(ui, &s.files_hint.replace("{dir}", &crate::config::app_dir().display().to_string()), p);
         if theme::button(ui, s.open_folder, Btn::Ghost, p).clicked() {
-            let _ = std::process::Command::new("explorer").arg(crate::config::app_dir()).spawn();
+            let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
+            let _ = std::process::Command::new(opener).arg(crate::config::app_dir()).spawn();
         }
         if !self.logs.is_empty() {
             theme::divider(ui, p);

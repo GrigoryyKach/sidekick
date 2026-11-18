@@ -45,6 +45,7 @@ pub struct S {
     // Status chips
     pub chip_hidden: &'static str,
     pub chip_visible: &'static str,
+    pub chip_linux_tip: &'static str,
     pub chip_passthrough: &'static str,
 
     // Transcript
@@ -193,6 +194,7 @@ const EN: S = S {
 
     chip_hidden: "hidden from screen capture",
     chip_visible: "window is visible in capture",
+    chip_linux_tip: "Not available on Linux: there is no way to hide a window from screen sharing, so this window is visible when you share the screen",
     chip_passthrough: "click-through · Ctrl+Shift+T",
 
     transcript: "Transcript",
@@ -345,6 +347,7 @@ const RU: S = S {
 
     chip_hidden: "скрыто от записи экрана",
     chip_visible: "окно видно при записи",
+    chip_linux_tip: "Недоступно в Linux: окно нельзя скрыть от демонстрации экрана, поэтому оно видно, когда вы показываете экран",
     chip_passthrough: "сквозные клики · Ctrl+Shift+T",
 
     transcript: "Расшифровка",
@@ -497,6 +500,7 @@ const UK: S = S {
 
     chip_hidden: "приховано від запису екрана",
     chip_visible: "вікно видно під час запису",
+    chip_linux_tip: "Недоступно в Linux: вікно не можна приховати від демонстрації екрана, тому воно видно, коли ви показуєте екран",
     chip_passthrough: "наскрізні кліки · Ctrl+Shift+T",
 
     transcript: "Розшифровка",

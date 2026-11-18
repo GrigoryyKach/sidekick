@@ -39,11 +39,20 @@
   ],
   "exe": "Sidekick.exe",
   "asset": "Sidekick-win-x64.zip",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
   "requirements": [
     "Windows 10 2004+ / 11 x64",
     "For speech recognition: Python with faster-whisper (NVIDIA GPU or CPU)",
     "An agent: Claude Code, an API key or a local model"
   ],
+  "linux": {
+    "asset": "Sidekick-linux-x64.tar.gz",
+    "exe": "sidekick",
+    "requirements": "Linux x86_64 (X11 or Wayland) with parec (pulseaudio-utils or pipewire-pulse) for system audio; screenshots: X11, or grim / gnome-screenshot / spectacle on Wayland; for speech recognition python3 with faster-whisper. Hiding the window from screen sharing is Windows only; global hotkeys work on X11 only"
+  },
   "settingsDir": "%APPDATA%\\Sidekick",
   "i18n": {
     "ru": {
@@ -76,7 +85,10 @@
         "Windows 10 2004+ / 11 x64",
         "Для распознавания речи: Python с faster-whisper (видеокарта NVIDIA или процессор)",
         "Агент: Claude Code, ключ API или локальная модель"
-      ]
+      ],
+      "linux": {
+        "requirements": "Linux x86_64 (X11 или Wayland) с parec (pulseaudio-utils или pipewire-pulse) для системного звука; скриншоты: X11 либо grim / gnome-screenshot / spectacle в Wayland; для распознавания речи python3 с faster-whisper. Скрытие окна от демонстрации экрана работает только в Windows; глобальные горячие клавиши — только в X11"
+      }
     },
     "uk": {
       "tagline": "Невидимий ШІ-асистент для дзвінків",
@@ -108,7 +120,10 @@
         "Windows 10 2004+ / 11 x64",
         "Для розпізнавання мовлення: Python із faster-whisper (відеокарта NVIDIA або процесор)",
         "Агент: Claude Code, ключ API або локальна модель"
-      ]
+      ],
+      "linux": {
+        "requirements": "Linux x86_64 (X11 або Wayland) з parec (pulseaudio-utils або pipewire-pulse) для системного звуку; знімки екрана: X11 або grim / gnome-screenshot / spectacle у Wayland; для розпізнавання мовлення python3 з faster-whisper. Приховування вікна від демонстрації екрана працює лише у Windows; глобальні гарячі клавіші — лише в X11"
+      }
     }
   }
 }

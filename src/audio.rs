@@ -1,8 +1,9 @@
-//! System-audio (WASAPI loopback) capture → mono 16 kHz → phrase segmentation by pauses.
+//! System-audio capture (WASAPI loopback on Windows, the PulseAudio/PipeWire monitor through `parec` on Linux) → mono 16 kHz → phrase segmentation by pauses.
 //! Only what plays through the speakers/headphones is captured, i.e. the other call
 //! participants — your own microphone never gets here.
 
 use crate::events::Event;
+#[cfg(windows)]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
 use std::sync::Arc;
@@ -46,6 +47,7 @@ pub fn start(
     AudioHandle { stop }
 }
 
+#[cfg(windows)]
 fn run(
     cfg: SegmenterCfg,
     seg_tx: Sender<Vec<f32>>,
@@ -93,6 +95,76 @@ fn run(
         "audio: loopback \"{name}\", {in_sr} Hz, {channels} ch."
     )));
 
+    pump(cfg, raw_rx, channels, in_sr, seg_tx, ev, ctx, stop);
+    drop(stream);
+    Ok(())
+}
+
+/// Linux: `parec` records the monitor of the default output (everything that plays through the speakers) and
+/// PulseAudio / PipeWire converts it to 16 kHz mono float32 for us.
+#[cfg(not(windows))]
+fn run(
+    cfg: SegmenterCfg,
+    seg_tx: Sender<Vec<f32>>,
+    ev: Sender<Event>,
+    ctx: eframe::egui::Context,
+    stop: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("parec")
+        .args(["--device=@DEFAULT_MONITOR@", "--format=float32le", "--rate=16000", "--channels=1", "--latency-msec=60"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("could not run parec (install pulseaudio-utils or pipewire-pulse): {e}"))?;
+    let mut out = child.stdout.take().ok_or_else(|| anyhow::anyhow!("parec has no output"))?;
+    let (raw_tx, raw_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) = unbounded();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 8192];
+        let mut tail: Vec<u8> = Vec::new();
+        loop {
+            let n = match out.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            tail.extend_from_slice(&buf[..n]);
+            let (samples, rest) = f32le_samples(&tail);
+            let rest = rest.to_vec();
+            if !samples.is_empty() && raw_tx.send(samples).is_err() {
+                break;
+            }
+            tail = rest;
+        }
+    });
+    let _ = ev.send(Event::Log("audio: monitor of the default output (parec), 16000 Hz, 1 ch.".into()));
+    pump(cfg, raw_rx, 1, SR, seg_tx, ev.clone(), ctx, stop);
+    let _ = child.kill();
+    let _ = child.wait();
+    Ok(())
+}
+
+/// Splits little-endian f32 bytes into samples; the incomplete tail (fewer than 4 bytes) is returned for the next call.
+#[cfg(any(not(windows), test))]
+fn f32le_samples(bytes: &[u8]) -> (Vec<f32>, &[u8]) {
+    let whole = bytes.len() / 4 * 4;
+    let samples = bytes[..whole].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    (samples, &bytes[whole..])
+}
+
+/// Raw audio -> mono 16 kHz -> phrases. Runs until `stop` is set or the source disconnects.
+#[allow(clippy::too_many_arguments)]
+fn pump(
+    cfg: SegmenterCfg,
+    raw_rx: Receiver<Vec<f32>>,
+    channels: usize,
+    in_sr: u32,
+    seg_tx: Sender<Vec<f32>>,
+    ev: Sender<Event>,
+    ctx: eframe::egui::Context,
+    stop: Arc<AtomicBool>,
+) {
     let mut rs = Resampler::new(in_sr, SR);
     let mut seg = Segmenter::new(cfg);
     let mut last_level = Instant::now();
@@ -122,8 +194,6 @@ fn run(
             ctx.request_repaint();
         }
     }
-    drop(stream);
-    Ok(())
 }
 
 struct Resampler {
@@ -252,4 +322,22 @@ impl Segmenter {
 /// recogniser cannot eat all memory).
 pub fn segment_channel() -> (Sender<Vec<f32>>, Receiver<Vec<f32>>) {
     bounded(64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::f32le_samples;
+
+    #[test]
+    fn splits_float_samples_and_keeps_the_tail() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0.5f32.to_le_bytes());
+        bytes.extend_from_slice(&(-1.0f32).to_le_bytes());
+        bytes.extend_from_slice(&[1, 2]);
+        let (s, rest) = f32le_samples(&bytes);
+        assert_eq!(s, vec![0.5, -1.0]);
+        assert_eq!(rest, &[1, 2]);
+        let (s, rest) = f32le_samples(&[]);
+        assert!(s.is_empty() && rest.is_empty());
+    }
 }

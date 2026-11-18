@@ -1,6 +1,6 @@
 [package]
 name = "sidekick"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2024"
 build = "build.rs"
 description = "Invisible AI assistant for calls: hidden from screen sharing"
@@ -12,7 +12,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
-cpal = "0.18.2"
 crossbeam-channel = "0.5.17"
 dirs = "7.0.0"
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow", "clipboard", "links"] }
@@ -22,8 +21,17 @@ parking_lot = "0.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 ureq = "3"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
+
+[target.'cfg(windows)'.dependencies]
+cpal = "0.18.2"
+# On Linux xcap would need libpipewire 1.x (Ubuntu 22.04 has 0.3.48); capture_linux.rs reads X11 directly instead.
 xcap = "0.9.8"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+eframe = { version = "0.37.0", default-features = false, features = ["x11", "wayland"] }
+global-hotkey = "0.7"
+x11rb = { version = "0.13", features = ["randr"] }
 
 [profile.release]
 opt-level = 3

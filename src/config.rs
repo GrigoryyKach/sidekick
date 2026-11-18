@@ -158,7 +158,7 @@ impl Default for Config {
             api_model: String::new(),
             command_line: String::new(),
             check_updates: true,
-            python_path: "python".into(),
+            python_path: (if cfg!(windows) { "python" } else { "python3" }).into(),
             whisper_model: "large-v3-turbo".into(),
             whisper_device: "cuda".into(),
             stt_language: "auto".into(),

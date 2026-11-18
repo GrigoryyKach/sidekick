@@ -3,10 +3,12 @@
 use crate::events::Event;
 use crossbeam_channel::{Receiver, Sender};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+#[cfg(windows)]
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct Stt {
@@ -50,7 +52,10 @@ pub fn start(
     ctx: eframe::egui::Context,
 ) -> anyhow::Result<Stt> {
     let script = find_script().ok_or_else(|| crate::errors::AppError::new(crate::errors::Kind::SttScriptMissing))?;
-    let mut child = Command::new(python)
+    let mut cmd = Command::new(python);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = cmd
         .arg("-u")
         .arg(&script)
         .args(["--model", model, "--language", language, "--device", device, "--prompt", prompt])
@@ -59,7 +64,6 @@ pub fn start(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| crate::errors::AppError::with(crate::errors::Kind::RunFailed(python.to_string()), e))?;
 

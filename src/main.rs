@@ -4,6 +4,8 @@ mod agent;
 mod app;
 mod audio;
 mod capture;
+#[cfg(not(windows))]
+mod capture_linux;
 mod claude;
 mod config;
 mod errors;
@@ -16,6 +18,10 @@ mod support;
 // Shared with the other NIMVORO tools: some of its widgets are not used here.
 #[allow(dead_code)]
 mod theme;
+#[cfg(windows)]
+mod win;
+#[cfg(not(windows))]
+#[path = "linux.rs"]
 mod win;
 
 use eframe::egui;

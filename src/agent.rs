@@ -9,12 +9,14 @@
 use crate::config::{AgentKind, Config, DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_URL, DEFAULT_OPENAI_URL, app_dir};
 use crate::errors::{AppError, Kind};
 use crate::events::Event;
+#[cfg(windows)]
 use crate::stt::CREATE_NO_WINDOW;
 use base64::Engine;
 use crossbeam_channel::{Sender, unbounded};
 use eframe::egui;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -360,7 +362,7 @@ fn append_str(block: &mut Value, key: &str, add: &str) {
 
 // ───────────────────────── custom command ─────────────────────────
 
-/// Runs the command through `cmd /C`, writes the system prompt and the question to stdin, reads stdout as the answer.
+/// Runs the command through `cmd /C` (`sh -c` on Linux), writes the system prompt and the question to stdin, reads stdout as the answer.
 /// If the command contains `{image}`, the path to the PNG screenshot is substituted there.
 fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &dyn Fn(Event)) -> anyhow::Result<String> {
     let mut line = line.to_string();
@@ -375,14 +377,23 @@ fn ask_command(line: &str, system: &str, text: &str, img: Option<&str>, emit: &d
         };
         line = line.replace("{image}", &path);
     }
-    let mut child = Command::new("cmd")
-        .arg("/C")
-        .raw_arg(&line)
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("cmd");
+        c.arg("/C").raw_arg(&line).creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = Command::new("sh");
+        c.arg("-c").arg(&line);
+        c
+    };
+    let mut child = cmd
         .current_dir(app_dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| AppError::with(Kind::RunFailed(line.clone()), e))?;
     {
