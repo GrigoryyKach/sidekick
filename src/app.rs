@@ -9,7 +9,7 @@ use crate::nimvoro::{self, UpdateState, Updater};
 use crate::stt::{self, Stt};
 use crate::strings::{S, TABLE};
 use crate::support;
-use crate::theme::{self, Btn, Pal, Textures, ThemeMode};
+use crate::theme::{self, Btn, Pal, ThemeMode};
 use crate::win;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui::{self, Align, Color32, Frame, Layout, Margin, RichText, Sense, Stroke, TextEdit, Ui, ViewportCommand, vec2};
@@ -18,9 +18,8 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const OK: Color32 = theme::hex(0x18a058);
-const WARN: Color32 = theme::hex(0xe39b12);
-const BAD: Color32 = theme::hex(0xe5484d);
+/// Cyan from the app icon. Light is the darker shade; both keep 4.5:1 as text on every surface.
+const ACCENT: theme::Accent = theme::Accent::new(0x2cb5d6, 0x0e7490, 0x141415, 0xffffff);
 
 struct Answer {
     title: String,
@@ -75,7 +74,6 @@ pub struct App {
     started: Instant,
     window_ready: bool,
     capture_excluded: bool,
-    tex: Textures,
     updater: Updater,
 
     agent: Arc<Mutex<Option<Box<dyn Agent>>>>,
@@ -116,6 +114,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config, title: String) -> Self {
         let (tx, rx) = unbounded();
         let ctx = cc.egui_ctx.clone();
+        theme::set_accent(ACCENT);
         theme::install(&ctx, cfg.theme);
         ctx.add_plugin(DefaultCursor);
         win::spawn_hotkeys(tx.clone(), ctx.clone());
@@ -138,7 +137,6 @@ impl App {
             started: Instant::now(),
             window_ready: false,
             capture_excluded: false,
-            tex: Textures::new(&ctx),
             updater,
             agent: Arc::new(Mutex::new(None)),
             agent_err: None,
@@ -192,6 +190,14 @@ impl App {
             self.transcript.push(Line { at: Duration::from_secs(secs), text: text.to_string() });
         }
         self.stt_state = SttState::Ready { model: self.cfg.whisper_model.clone(), device: "CUDA".into(), load_s: "4.2".into() };
+        self.answers.push(Answer {
+            title: "Speech · 4 lines".into(),
+            with_screen: false,
+            text: "Use a hash map to find the pair in one pass. Time O(n), memory O(n).\n\n```python\ndef two_sum(nums, target):\n    seen = {}\n    for i, x in enumerate(nums):\n        if target - x in seen:\n            return [seen[target - x], i]\n        seen[x] = i\n```\n\nSorting plus two pointers also works, in O(n log n) time and O(1) extra memory.".into(),
+            done: true,
+            error: false,
+        });
+        self.sent_upto = self.transcript.len();
     }
 
     /// Strings of the current interface language.
@@ -554,14 +560,19 @@ impl App {
         Color32::from_rgba_unmultiplied(r, g, b, a)
     }
 
+    /// A card on the translucent window: follows the opacity setting, hairline outline, radius 12.
+    fn card_frame(&self, p: &Pal, margin: Margin) -> Frame {
+        Frame::new().fill(self.card_fill(p)).stroke(Stroke::new(1.0, p.line)).corner_radius(theme::R_CARD).inner_margin(margin)
+    }
+
     fn header(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            theme::logo(ui, 24.0, "S", &self.tex);
+            theme::mark(ui, 20.0, icon_headset, p);
             let r = ui.add(
-                egui::Label::new(RichText::new("Sidekick").font(theme::semi(15.0)).color(p.text))
+                egui::Label::new(RichText::new("Sidekick").font(theme::medium(14.0)).color(p.text))
                     .selectable(false)
                     .sense(Sense::click_and_drag()),
             );
@@ -571,21 +582,21 @@ impl App {
             r.on_hover_text(s.drag_tip);
             // The empty part of the header drags the window too.
             let rest = ui.available_rect_before_wrap();
-            let drag = ui.interact(rest.with_max_x(rest.max.x - 150.0), ui.scope_id().with("drag"), Sense::click_and_drag());
+            let drag = ui.interact(rest.with_max_x(rest.max.x - 188.0), ui.scope_id().with("drag"), Sense::click_and_drag());
             if drag.drag_started() {
                 ctx.send_viewport_cmd(ViewportCommand::StartDrag);
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if theme::button(ui, "✕", Btn::Small, p).on_hover_text(s.exit).clicked() {
+                if icon_button(ui, "close", icon_close, IconKind::Plain, 28.0, p).on_hover_text(s.exit).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 }
-                if theme::button(ui, "—", Btn::Small, p).on_hover_text(s.hide_tip).clicked() {
+                if icon_button(ui, "hide", icon_minus, IconKind::Plain, 28.0, p).on_hover_text(s.hide_tip).clicked() {
                     win::set_visible(false);
                 }
-                let gear = if self.show_settings { Btn::Soft } else { Btn::Small };
-                if theme::button(ui, "⚙", gear, p).on_hover_text(s.settings).clicked() {
+                let kind = if self.show_settings { IconKind::Active } else { IconKind::Plain };
+                if icon_button(ui, "gear", icon_gear, kind, 28.0, p).on_hover_text(s.settings).clicked() {
                     self.toggle_settings();
                 }
                 if theme::button(ui, s.new_chat, Btn::Small, p).on_hover_text("Ctrl+Shift+N").clicked() {
@@ -605,18 +616,16 @@ impl App {
         let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            if theme::button(ui, s.btn_screen, Btn::Soft, p).on_hover_text("Ctrl+Shift+Space").clicked() {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if theme::button(ui, s.btn_screen, Btn::Primary, p).on_hover_text("Ctrl+Shift+Space").clicked() {
                 self.ask(true, None, &ctx);
             }
-            // The speech-balloon emoji has no glyph in the Linux fallback fonts; the microphone does.
-            let speech_label = if cfg!(windows) { s.btn_speech.to_string() } else { s.btn_speech.replace('💬', "🎙") };
-            if theme::button(ui, &speech_label, Btn::Ghost, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
+            if theme::button(ui, s.btn_speech, Btn::Secondary, p).on_hover_text("Ctrl+Shift+Enter").clicked() {
                 self.ask(false, None, &ctx);
             }
             egui::ComboBox::from_id_salt("mon")
                 .selected_text(s.monitor_n.replace("{n}", &(self.cfg.monitor_index + 1).to_string()))
-                .width(110.0)
+                .width(104.0)
                 .show_ui(ui, |ui| {
                     for (i, m) in self.monitors.iter().enumerate() {
                         if ui.selectable_label(self.cfg.monitor_index == i, m.label(s.monitor_primary)).clicked() {
@@ -636,7 +645,7 @@ impl App {
                 if r.changed() {
                     self.set_listening(on, &ctx);
                 }
-                ui.label(RichText::new(s.listen).font(theme::reg(13.0)).color(if listening { p.text } else { p.muted }));
+                ui.label(RichText::new(s.listen).font(theme::reg(13.0)).color(if listening { p.text } else { p.text2 }));
             });
         });
     }
@@ -644,36 +653,38 @@ impl App {
     fn status_row(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+            ui.spacing_mut().item_spacing = vec2(16.0, 4.0);
             if self.capture_excluded || self.demo {
-                chip(ui, p, OK, s.chip_hidden);
+                chip(ui, p, p.positive, false, s.chip_hidden);
             } else {
-                let r = chip(ui, p, WARN, s.chip_visible);
+                let r = chip(ui, p, p.warning, false, s.chip_visible);
                 if cfg!(not(windows)) {
                     // Linux has no way to exclude a window from screen capture.
                     r.on_hover_text(s.chip_linux_tip);
                 }
             }
             let col = match self.agent_state {
-                AgentState::Ready => OK,
-                AgentState::Starting => WARN,
-                AgentState::Error => BAD,
+                AgentState::Ready => p.positive,
+                AgentState::Starting => p.warning,
+                AgentState::Error => p.negative,
                 AgentState::Off | AgentState::Stopped => p.muted,
             };
-            chip(ui, p, col, &self.agent_status_text());
-            let stt_col = if (self.audio.is_some() && self.stt.is_some()) || self.demo { OK } else { p.muted };
-            let r = chip(ui, p, stt_col, &self.stt_status_text());
+            chip(ui, p, col, false, &self.agent_status_text());
+            // The signature: the recognition dot fades once every 1.6 s, and only while it is really listening.
+            let capturing = self.audio.is_some() && self.stt.is_some();
+            let stt_col = if capturing || self.demo { p.positive } else { p.muted };
+            let r = chip(ui, p, stt_col, capturing, &self.stt_status_text());
             if self.audio.is_some() {
-                // Audio level right inside the recognition pill.
+                // Audio level under the recognition status.
                 let w = (self.level * 800.0).clamp(0.0, 1.0);
-                let bar = egui::Rect::from_min_size(r.rect.left_bottom() + vec2(10.0, -4.0), vec2(r.rect.width() - 20.0, 2.0));
-                ui.painter().rect_filled(bar, 1.0, p.track);
+                let bar = egui::Rect::from_min_size(r.rect.left_bottom() + vec2(16.0, 1.0), vec2((r.rect.width() - 16.0).max(0.0), 2.0));
+                ui.painter().rect_filled(bar, 1.0, p.line_hi);
                 let mut fill = bar;
                 fill.set_width(bar.width() * w);
-                ui.painter().rect_filled(fill, 1.0, if self.level > self.cfg.vad_threshold { OK } else { p.muted });
+                ui.painter().rect_filled(fill, 1.0, if self.level > self.cfg.vad_threshold { p.positive } else { p.muted });
             }
             if self.click_through {
-                chip(ui, p, p.accent, s.chip_passthrough);
+                chip(ui, p, p.accent, false, s.chip_passthrough);
             }
         });
     }
@@ -681,43 +692,48 @@ impl App {
     fn update_banner(&mut self, ui: &mut Ui, p: &Pal) {
         let UpdateState::Available { version, .. } = self.updater.state() else { return };
         let t = nimvoro::strings(self.lang);
-        Frame::new().fill(p.accent_soft).corner_radius(10.0).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(t.available.replace("{v}", &version)).font(theme::semi(13.0)).color(p.text));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if theme::button(ui, t.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
-                        self.cfg.save();
-                        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
-                    }
+        Frame::new()
+            .fill(p.raised)
+            .stroke(Stroke::new(1.0, p.line_hi))
+            .corner_radius(theme::R_CARD)
+            .inner_margin(Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t.available.replace("{v}", &version)).font(theme::medium(13.0)).color(p.text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
+                            self.cfg.save();
+                            ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                        }
+                    });
                 });
             });
-        });
     }
 
     fn transcript_view(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let new = self.transcript.len() - self.sent_upto;
-        Frame::new().fill(self.card_fill(p)).corner_radius(12.0).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        self.card_frame(p, Margin::same(12)).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let head = ui.horizontal(|ui| {
-                theme::caps(ui, s.transcript, p);
-                if new > 0 {
-                    theme::pill(ui, &i18n::plural(self.lang, new, &s.new_lines), p);
+            ui.horizontal(|ui| {
+                let r = theme::disclosure(ui, s.transcript, self.show_transcript, p).on_hover_text(if self.show_transcript { s.collapse } else { s.expand });
+                if r.clicked() {
+                    self.show_transcript = !self.show_transcript;
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(if self.show_transcript { s.collapse } else { s.expand }).font(theme::reg(12.0)).color(p.muted));
-                });
+                if new > 0 {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        theme::meta(ui, &i18n::plural(self.lang, new, &s.new_lines), p);
+                    });
+                }
             });
-            if ui.interact(head.response.rect, ui.scope_id().with("tr-head"), Sense::click()).clicked() {
-                self.show_transcript = !self.show_transcript;
-            }
             if !self.show_transcript {
                 return;
             }
-            egui::ScrollArea::vertical().id_salt("trs").max_height(110.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("trs").max_height(112.0).stick_to_bottom(true).auto_shrink([false, true]).show(ui, |ui| {
                 // The shared theme turns label selection off; the transcript must be copyable.
                 ui.style_mut().interaction.selectable_labels = true;
+                ui.spacing_mut().item_spacing = vec2(12.0, 4.0);
                 if self.transcript.is_empty() {
                     theme::hint(ui, s.transcript_empty, p);
                 }
@@ -725,8 +741,11 @@ impl App {
                     let secs = l.at.as_secs();
                     let fresh = i >= self.sent_upto;
                     ui.horizontal_top(|ui| {
-                        ui.label(RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60)).font(theme::reg(12.0)).color(p.muted));
-                        ui.add(egui::Label::new(RichText::new(&l.text).font(theme::reg(13.5)).color(if fresh { p.text } else { p.muted })).wrap());
+                        // A fixed mono column for the time stamps, so the lines start on one edge.
+                        ui.allocate_ui_with_layout(vec2(36.0, 20.0), Layout::left_to_right(Align::Min), |ui| {
+                            ui.label(RichText::new(format!("{:02}:{:02}", secs / 60, secs % 60)).font(theme::mono(12.0)).color(p.muted));
+                        });
+                        ui.add(egui::Label::new(RichText::new(&l.text).font(theme::reg(14.0)).color(if fresh { p.text } else { p.text2 })).wrap());
                     });
                 }
             });
@@ -735,7 +754,7 @@ impl App {
 
     fn answers_view(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
-        let avail = ui.available_height() - 48.0;
+        let avail = ui.available_height() - 52.0;
         let mut sa = egui::ScrollArea::vertical()
             .id_salt("ans")
             .max_height(avail.max(60.0))
@@ -745,36 +764,41 @@ impl App {
             sa = sa.vertical_scroll_offset(y);
             self.stick_bottom = false;
         }
-        let fill = self.card_fill(p);
         let out = sa.show(ui, |ui| {
             // The shared theme turns label selection off; answers must be selectable and copyable.
             ui.style_mut().interaction.selectable_labels = true;
+            ui.spacing_mut().item_spacing.y = 8.0;
             if self.answers.is_empty() {
-                Frame::new().fill(fill).corner_radius(12.0).inner_margin(Margin::same(14)).show(ui, |ui| {
+                self.card_frame(p, Margin::same(16)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(RichText::new(s.ready_title).font(theme::semi(15.0)).color(p.text));
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    ui.label(RichText::new(s.ready_title).font(theme::medium(14.0)).color(p.text));
                     theme::hint(ui, s.ready_hint, p);
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     egui::Grid::new("keys").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                         for (k, d) in win::HOTKEY_KEYS.iter().zip(s.hotkeys.iter()) {
-                            ui.label(RichText::new(*k).font(theme::semi(12.0)).color(p.accent));
-                            ui.label(RichText::new(*d).font(theme::reg(12.5)).color(p.muted));
+                            theme::keycap(ui, k, p);
+                            ui.label(RichText::new(*d).font(theme::reg(12.0)).color(p.text2));
                             ui.end_row();
                         }
                     });
                 });
             }
             for a in self.answers.iter() {
-                ui.add_space(6.0);
-                let stroke = if a.error { Stroke::new(1.0, BAD.gamma_multiply(0.6)) } else { Stroke::new(1.0, p.line) };
-                Frame::new().fill(fill).stroke(stroke).corner_radius(12.0).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
+                let fill = self.card_fill(p);
+                let stroke = if a.error { Stroke::new(1.0, p.negative) } else { Stroke::new(1.0, p.line) };
+                Frame::new().fill(fill).stroke(stroke).corner_radius(theme::R_CARD).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
+                    // Code blocks and inline code sit one step above the card, in the neutral ramp.
+                    ui.visuals_mut().code_bg_color = p.raised;
                     ui.horizontal(|ui| {
-                        let col = if a.error { BAD } else { p.accent };
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let col = if a.error { p.negative } else { p.text2 };
                         if a.with_screen {
-                            ui.label(RichText::new("📷").font(theme::reg(12.0)).color(col));
+                            let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            icon_camera(ui.painter(), rect.center(), col);
                         }
-                        ui.add(egui::Label::new(RichText::new(&a.title).font(theme::semi(12.5)).color(col)).truncate());
+                        ui.add(egui::Label::new(RichText::new(&a.title).font(theme::medium(13.0)).color(col)).truncate());
                         if !a.done {
                             ui.add(egui::Spinner::new().size(12.0).color(p.accent));
                         }
@@ -784,7 +808,7 @@ impl App {
                             }
                         });
                     });
-                    ui.add_space(2.0);
+                    ui.add_space(4.0);
                     if a.text.is_empty() && !a.done {
                         theme::hint(ui, s.thinking, p);
                     } else {
@@ -792,7 +816,6 @@ impl App {
                     }
                 });
             }
-            ui.add_space(6.0);
         });
         self.scroll_cur = out.state.clamped_offset().y;
         let max = (out.content_size.y - out.inner_rect.height()).max(0.0);
@@ -807,21 +830,24 @@ impl App {
         let s = self.s();
         let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let kind = if self.input_with_screen { Btn::Soft } else { Btn::Ghost };
-            if theme::button(ui, "📷", kind, p).on_hover_text(s.attach_tip).clicked() {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let kind = if self.input_with_screen { IconKind::Active } else { IconKind::Plain };
+            if icon_button(ui, "attach", icon_camera, kind, 32.0, p).on_hover_text(s.attach_tip).clicked() {
                 self.input_with_screen = !self.input_with_screen;
             }
-            let w = ui.available_width() - 44.0;
+            let w = ui.available_width() - 32.0 - ui.spacing().item_spacing.x;
             let r = ui.add(
                 TextEdit::singleline(&mut self.input)
                     .hint_text(s.ask_hint)
                     .desired_width(w)
-                    .margin(Margin::symmetric(10, 7))
+                    .margin(Margin::symmetric(12, 8))
                     .font(theme::reg(14.0)),
             );
             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (theme::button(ui, "➤", Btn::Soft, p).on_hover_text(s.send_tip).clicked() || enter) && !self.input.trim().is_empty() {
+            let has_text = !self.input.trim().is_empty();
+            let send_kind = if has_text { IconKind::Filled } else { IconKind::Plain };
+            let clicked = icon_button(ui, "send", icon_send, send_kind, 32.0, p).on_hover_text(s.send_tip).clicked();
+            if (clicked || enter) && has_text {
                 let q = std::mem::take(&mut self.input);
                 self.ask(self.input_with_screen, Some(q), &ctx);
             }
@@ -841,12 +867,12 @@ impl App {
             .default_width(460.0)
             .min_width(420.0)
             .default_height(520.0)
-            .frame(Frame::window(&ctx.style_of(ctx.theme())).fill(p.card).inner_margin(Margin::same(16)))
+            .frame(Frame::window(&ctx.style_of(ctx.theme())).fill(p.card).stroke(Stroke::new(1.0, p.line_hi)).corner_radius(theme::R_WINDOW).shadow(theme::shadow_for(p)).inner_margin(Margin::same(16)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(s.settings).font(theme::semi(15.0)).color(p.text));
+                    ui.label(RichText::new(s.settings).font(theme::medium(14.0)).color(p.text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::button(ui, "✕", Btn::Small, p).on_hover_text(s.close).clicked() {
+                        if icon_button(ui, "sclose", icon_close, IconKind::Plain, 28.0, p).on_hover_text(s.close).clicked() {
                             close = true;
                         }
                     });
@@ -861,7 +887,7 @@ impl App {
                         (SettingsTab::Prompts, s.tab_prompts),
                         (SettingsTab::About, s.tab_about),
                     ] {
-                        let kind = if self.settings_tab == tab { Btn::Soft } else { Btn::Ghost };
+                        let kind = if self.settings_tab == tab { Btn::Secondary } else { Btn::Quiet };
                         if theme::button(ui, name, kind, p).clicked() {
                             self.settings_tab = tab;
                         }
@@ -882,7 +908,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let dirty = !same_config(&self.draft, &self.cfg);
                     let label = if dirty { s.apply } else { s.saved };
-                    if theme::button(ui, label, if dirty { Btn::Soft } else { Btn::Ghost }, p).clicked() && dirty {
+                    if theme::button(ui, label, if dirty { Btn::Primary } else { Btn::Quiet }, p).clicked() && dirty {
                         apply = true;
                     }
                     if dirty && theme::button(ui, s.revert, Btn::Link, p).clicked() {
@@ -901,11 +927,11 @@ impl App {
     fn settings_agent(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, s.who_answers, p);
+        theme::section(ui, s.who_answers, p);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for k in AgentKind::ALL {
-                let kind = if d.agent == k { Btn::Soft } else { Btn::Ghost };
+                let kind = if d.agent == k { Btn::Secondary } else { Btn::Quiet };
                 if theme::button(ui, s.agent_titles[k.index()], kind, p).clicked() {
                     d.agent = k;
                 }
@@ -917,7 +943,7 @@ impl App {
 
         match d.agent {
             AgentKind::ClaudeCode => {
-                theme::caps(ui, "Claude Code", p);
+                theme::section(ui, "Claude Code", p);
                 field(ui, p, s.model, None, |ui| {
                     egui::ComboBox::from_id_salt("model").selected_text(&d.model).show_ui(ui, |ui| {
                         for m in ["sonnet", "opus", "haiku"] {
@@ -931,7 +957,7 @@ impl App {
                 });
             }
             AgentKind::Anthropic => {
-                theme::caps(ui, "Anthropic API", p);
+                theme::section(ui, "Anthropic API", p);
                 field(ui, p, s.api_key, Some(s.api_key_hint_anthropic), |ui| {
                     key_edit(ui, p, s, &mut d.api_key, &mut self.show_key);
                 });
@@ -949,7 +975,7 @@ impl App {
                 });
             }
             AgentKind::OpenAi => {
-                theme::caps(ui, s.server, p);
+                theme::section(ui, s.server, p);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for (name, url) in [
@@ -958,7 +984,7 @@ impl App {
                         ("Ollama", "http://localhost:11434/v1"),
                         ("LM Studio", "http://localhost:1234/v1"),
                     ] {
-                        let kind = if d.api_base_url == url || (d.api_base_url.is_empty() && url == DEFAULT_OPENAI_URL) { Btn::Soft } else { Btn::Small };
+                        let kind = if d.api_base_url == url || (d.api_base_url.is_empty() && url == DEFAULT_OPENAI_URL) { Btn::Secondary } else { Btn::Small };
                         if theme::button(ui, name, kind, p).clicked() {
                             d.api_base_url = url.to_string();
                         }
@@ -975,7 +1001,7 @@ impl App {
                 });
             }
             AgentKind::Command => {
-                theme::caps(ui, s.command, p);
+                theme::section(ui, s.command, p);
                 field(ui, p, s.cmdline, Some(s.cmdline_hint), |ui| {
                     ui.add(TextEdit::singleline(&mut d.command_line).hint_text("ollama run llama3.2").desired_width(f32::INFINITY));
                 });
@@ -983,7 +1009,7 @@ impl App {
             }
         }
         theme::divider(ui, p);
-        theme::caps(ui, s.answer, p);
+        theme::section(ui, s.answer, p);
         field(ui, p, s.answer_lang, Some(s.answer_lang_hint), |ui| {
             ui.add(TextEdit::singleline(&mut d.answer_language).hint_text(self.lang.native_name()).desired_width(f32::INFINITY));
         });
@@ -995,7 +1021,7 @@ impl App {
     fn settings_speech(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, s.speech_rec, p);
+        theme::section(ui, s.speech_rec, p);
         switch_row(ui, p, s.listen_start, s.listen_start_hint, &mut d.listen_on_start);
         field(ui, p, s.whisper_model, None, |ui| {
             egui::ComboBox::from_id_salt("wm").selected_text(&d.whisper_model).show_ui(ui, |ui| {
@@ -1022,7 +1048,7 @@ impl App {
             ui.add(TextEdit::singleline(&mut d.python_path).desired_width(f32::INFINITY));
         });
         theme::divider(ui, p);
-        theme::caps(ui, s.phrases, p);
+        theme::section(ui, s.phrases, p);
         field(ui, p, s.vad, None, |ui| {
             ui.add(egui::Slider::new(&mut d.vad_threshold, 0.001..=0.05).logarithmic(true));
         });
@@ -1030,7 +1056,7 @@ impl App {
             ui.add(egui::DragValue::new(&mut d.silence_ms).range(300..=3000));
         });
         theme::divider(ui, p);
-        theme::caps(ui, s.whisper_prompt, p);
+        theme::section(ui, s.whisper_prompt, p);
         theme::hint(ui, s.whisper_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.stt_prompt).desired_rows(3).desired_width(f32::INFINITY));
         if theme::button(ui, s.reset_whisper_prompt, Btn::Link, p).clicked() {
@@ -1041,7 +1067,7 @@ impl App {
     fn settings_window_tab(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let ctx = ui.ctx().clone();
-        theme::caps(ui, s.appearance, p);
+        theme::section(ui, s.appearance, p);
         // Language and theme apply live and are saved at once; they are not part of the draft.
         let mut lang = self.lang;
         if i18n::language_row(ui, &mut lang, p) {
@@ -1055,7 +1081,7 @@ impl App {
 
         let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, s.window, p);
+        theme::section(ui, s.window, p);
         field(ui, p, s.shot_monitor, None, |ui| {
             egui::ComboBox::from_id_salt("smon")
                 .selected_text(self.monitors.get(d.monitor_index).map(|m| m.label(s.monitor_primary)).unwrap_or("—".into()))
@@ -1067,13 +1093,13 @@ impl App {
         });
         ui.horizontal(|ui| {
             ui.label(RichText::new(s.opacity).font(theme::reg(14.0)).color(p.text));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::pill(ui, &format!("{}%", (d.opacity * 100.0).round()), p));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::meta(ui, &format!("{}%", (d.opacity * 100.0).round()), p));
         });
         theme::slider(ui, &mut d.opacity, 0.15, 1.0, 0.05, p);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(s.text_size).font(theme::reg(14.0)).color(p.text));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::pill(ui, &format!("{}", d.font_size.round()), p));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| theme::meta(ui, &format!("{}", d.font_size.round()), p));
         });
         theme::slider(ui, &mut d.font_size, 10.0, 22.0, 1.0, p);
     }
@@ -1081,7 +1107,7 @@ impl App {
     fn settings_prompts(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let d = &mut self.draft;
-        theme::caps(ui, s.system_prompt, p);
+        theme::section(ui, s.system_prompt, p);
         theme::hint(ui, s.system_prompt_hint, p);
         ui.add(TextEdit::multiline(&mut d.system_prompt).desired_rows(12).desired_width(f32::INFINITY).font(theme::reg(13.0)));
         if theme::button(ui, s.reset_prompt, Btn::Link, p).clicked() {
@@ -1092,7 +1118,7 @@ impl App {
     fn settings_about(&mut self, ui: &mut Ui, p: &Pal) {
         let s = self.s();
         let t = nimvoro::strings(self.lang);
-        theme::caps(ui, t.updates, p);
+        theme::section(ui, t.updates, p);
         switch_row(ui, p, t.check_on_start, t.check_on_start_hint, &mut self.draft.check_updates);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -1103,7 +1129,7 @@ impl App {
             theme::hint(ui, &status, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let UpdateState::Available { .. } = self.updater.state() {
-                    if theme::button(ui, t.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
+                    if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
                         self.cfg.save();
                         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
                     }
@@ -1116,17 +1142,17 @@ impl App {
         theme::divider(ui, p);
         support::support_section(ui, self.lang);
         theme::divider(ui, p);
-        theme::caps(ui, s.files, p);
+        theme::section(ui, s.files, p);
         theme::hint(ui, &s.files_hint.replace("{dir}", &crate::config::app_dir().display().to_string()), p);
-        if theme::button(ui, s.open_folder, Btn::Ghost, p).clicked() {
+        if theme::button(ui, s.open_folder, Btn::Secondary, p).clicked() {
             let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
             let _ = std::process::Command::new(opener).arg(crate::config::app_dir()).spawn();
         }
         if !self.logs.is_empty() {
             theme::divider(ui, p);
-            theme::caps(ui, s.log, p);
+            theme::section(ui, s.log, p);
             for l in self.logs.iter().rev().take(30) {
-                ui.label(RichText::new(l).font(egui::FontId::monospace(11.5)).color(p.muted));
+                ui.label(RichText::new(l).font(theme::mono(12.0)).color(p.muted));
             }
         }
     }
@@ -1198,12 +1224,12 @@ fn same_config(a: &Config, b: &Config) -> bool {
 /// Label on the left, control on the right, hint under the label.
 fn field(ui: &mut Ui, p: &Pal, label: &str, hint: Option<&str>, add: impl FnOnce(&mut Ui)) {
     let w = ui.available_width();
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width((w * 0.42).max(150.0));
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new(label).font(theme::reg(14.0)).color(p.text));
             if let Some(h) = hint {
-                ui.add_space(-6.0);
                 theme::hint(ui, h, p);
             }
         });
@@ -1212,7 +1238,6 @@ fn field(ui: &mut Ui, p: &Pal, label: &str, hint: Option<&str>, add: impl FnOnce
             add(ui);
         });
     });
-    ui.add_space(4.0);
 }
 
 fn effort_field(ui: &mut Ui, p: &Pal, s: &S, effort: &mut String) {
@@ -1229,8 +1254,8 @@ fn effort_field(ui: &mut Ui, p: &Pal, s: &S, effort: &mut String) {
 
 fn key_edit(ui: &mut Ui, p: &Pal, s: &S, key: &mut String, show: &mut bool) {
     ui.horizontal(|ui| {
-        let w = ui.available_width() - 70.0;
-        ui.add(TextEdit::singleline(key).password(!*show).hint_text("sk-…").desired_width(w));
+        let w = ui.available_width() - 56.0;
+        ui.add(TextEdit::singleline(key).password(!*show).hint_text("sk-").desired_width(w));
         if theme::button(ui, if *show { s.hide } else { s.show }, Btn::Link, p).clicked() {
             *show = !*show;
         }
@@ -1242,32 +1267,122 @@ fn switch_row(ui: &mut Ui, p: &Pal, title: &str, hint: &str, value: &mut bool) -
     let w = ui.available_width();
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.set_width(w - 58.0);
+            ui.set_width(w - 56.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new(title).font(theme::reg(14.0)).color(p.text));
-            ui.add_space(-6.0);
             theme::hint(ui, hint, p);
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             changed = theme::switch(ui, value, p).changed();
         });
     });
-    ui.add_space(4.0);
     changed
 }
 
-/// Status pill with a coloured dot.
-fn chip(ui: &mut Ui, p: &Pal, dot: Color32, text: &str) -> egui::Response {
+/// A status: a dot and quiet text, no capsule. `live` fades the dot once every 1.6 s (only while really listening).
+fn chip(ui: &mut Ui, p: &Pal, dot: Color32, live: bool, text: &str) -> egui::Response {
     let font = theme::reg(12.0);
-    let g = ui.painter().layout_no_wrap(text.to_string(), font, p.muted);
+    let g = ui.painter().layout_no_wrap(text.to_string(), font, p.text2);
     let max_w = ui.available_width().max(80.0);
-    let w = (g.size().x + 28.0).min(max_w);
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+    let w = (g.size().x + 16.0).min(max_w);
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 20.0), Sense::hover());
+    let dot = if live {
+        let t = ui.input(|i| i.time) as f32;
+        let k = 0.5 + 0.5 * (t / 1.6 * std::f32::consts::TAU).cos();
+        ui.ctx().request_repaint_after(Duration::from_millis(33));
+        dot.gamma_multiply(0.4 + 0.6 * k)
+    } else {
+        dot
+    };
     let painter = ui.painter();
-    painter.rect_filled(r, 11.0, Color32::from_rgba_unmultiplied(127, 127, 127, 26));
-    painter.circle_filled(egui::pos2(r.left() + 11.0, r.center().y), 3.5, dot);
-    let clip = egui::Rect::from_min_max(egui::pos2(r.left() + 19.0, r.top()), egui::pos2(r.right() - 8.0, r.bottom()));
-    painter.with_clip_rect(clip).galley(egui::pos2(clip.left(), r.center().y - g.size().y / 2.0), g, p.muted);
+    painter.circle_filled(egui::pos2(r.left() + 3.0, r.center().y), 3.0, dot);
+    let clip = egui::Rect::from_min_max(egui::pos2(r.left() + 12.0, r.top()), egui::pos2(r.right(), r.bottom()));
+    painter.with_clip_rect(clip).galley(egui::pos2(clip.left(), r.center().y - g.size().y / 2.0), g, p.text2);
     resp.on_hover_text(text)
+}
+
+// ───────────────────────── icons and icon buttons ─────────────────────────
+// 16px box, 1.5px stroke, in the colour of a text role.
+
+#[derive(Clone, Copy, PartialEq)]
+enum IconKind {
+    /// No fill; a raised step on hover.
+    Plain,
+    /// The mode is on: raised fill, hairline, accent icon.
+    Active,
+    /// The primary action of the row: solid accent.
+    Filled,
+}
+
+fn icon_button(ui: &mut Ui, id: &str, icon: fn(&egui::Painter, egui::Pos2, Color32), kind: IconKind, size: f32, p: &Pal) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    let t = theme::fade(ui, resp.id.with(("hover", id)), resp.hovered());
+    let (fill, stroke, col) = match kind {
+        IconKind::Plain => (theme::alpha(p.raised, (t * 255.0) as u8), Stroke::NONE, theme::mix(p.text2, p.text, t)),
+        IconKind::Active => (theme::mix(p.raised, p.raised_hi, t), Stroke::new(1.0, p.line_hi), p.accent),
+        IconKind::Filled => (theme::mix(p.accent, p.accent_hover(), t), Stroke::NONE, p.on_accent),
+    };
+    let r = if resp.is_pointer_button_down_on() { egui::Rect::from_center_size(rect.center(), rect.size() * 0.98) } else { rect };
+    let painter = ui.painter();
+    painter.rect(r, theme::R_CONTROL as f32, fill, stroke, egui::StrokeKind::Inside);
+    icon(painter, rect.center(), col);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn arc(painter: &egui::Painter, c: egui::Pos2, r: f32, from: f32, to: f32, stroke: Stroke) {
+    let pts: Vec<egui::Pos2> = (0..=16)
+        .map(|i| {
+            let a = from + (to - from) * i as f32 / 16.0;
+            c + vec2(a.cos(), a.sin()) * r
+        })
+        .collect();
+    painter.add(egui::Shape::line(pts, stroke));
+}
+
+/// The app mark: a headset (the earpiece of the signature, "someone listens").
+fn icon_headset(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.5, col);
+    arc(painter, c + vec2(0.0, 1.0), 6.5, std::f32::consts::PI, std::f32::consts::TAU, s);
+    for x in [-6.5, 6.5] {
+        painter.line_segment([c + vec2(x, 1.0), c + vec2(x, 4.0)], Stroke::new(3.0, col));
+    }
+    arc(painter, c + vec2(0.0, 4.0), 6.5, 0.2, std::f32::consts::FRAC_PI_2, Stroke::new(1.5, col));
+}
+
+fn icon_close(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.5, col);
+    painter.line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], s);
+    painter.line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], s);
+}
+
+fn icon_minus(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    painter.line_segment([c + vec2(-5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(1.5, col));
+}
+
+fn icon_gear(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.5, col);
+    painter.circle_stroke(c, 2.5, s);
+    for k in 0..8 {
+        let a = k as f32 * std::f32::consts::FRAC_PI_4;
+        let d = vec2(a.cos(), a.sin());
+        painter.line_segment([c + d * 5.0, c + d * 7.0], s);
+    }
+    painter.circle_stroke(c, 5.0, Stroke::new(1.5, col));
+}
+
+fn icon_camera(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.5, col);
+    let body = egui::Rect::from_center_size(c + vec2(0.0, 1.0), vec2(13.0, 9.0));
+    painter.rect_stroke(body, 2.0, s, egui::StrokeKind::Middle);
+    painter.line_segment([c + vec2(-2.5, -3.5), c + vec2(2.5, -3.5)], s);
+    painter.circle_stroke(c + vec2(0.0, 1.0), 2.5, s);
+}
+
+fn icon_send(painter: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let s = Stroke::new(1.5, col);
+    painter.line_segment([c + vec2(-6.0, 0.0), c + vec2(6.0, 0.0)], s);
+    painter.line_segment([c + vec2(1.5, -4.5), c + vec2(6.0, 0.0)], s);
+    painter.line_segment([c + vec2(1.5, 4.5), c + vec2(6.0, 0.0)], s);
 }
 
 /// The OS cursor is visible in screen sharing even though the window is not, so the
@@ -1319,9 +1434,9 @@ impl eframe::App for App {
         let bg = Color32::from_rgba_unmultiplied(r, g, b, (self.cfg.opacity * 255.0) as u8);
         Frame::new()
             .fill(bg)
-            .corner_radius(14.0)
-            .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(111, 135, 255, 70)))
-            .inner_margin(Margin::same(12))
+            .corner_radius(theme::R_WINDOW)
+            .stroke(Stroke::new(1.0, p.line_hi))
+            .inner_margin(Margin::same(16))
             .show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
                 ui.spacing_mut().item_spacing.y = 8.0;
@@ -1341,7 +1456,7 @@ impl eframe::App for App {
         let painter = ui.painter();
         for k in 0..3 {
             let o = 4.0 + k as f32 * 4.0;
-            painter.line_segment([grip.max - vec2(o, 3.0), grip.max - vec2(3.0, o)], Stroke::new(1.2, p.muted.gamma_multiply(0.7)));
+            painter.line_segment([grip.max - vec2(o, 3.0), grip.max - vec2(3.0, o)], Stroke::new(1.5, p.muted));
         }
         if resp.drag_started() {
             ctx.send_viewport_cmd(ViewportCommand::BeginResize(egui::ResizeDirection::SouthEast));
@@ -1349,6 +1464,24 @@ impl eframe::App for App {
 
         if self.show_settings {
             self.settings_window(&ctx, &p);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accent_is_readable_in_both_themes() {
+        for (name, fill, on, surfaces) in [
+            ("dark", ACCENT.dark, ACCENT.on_dark, [theme::Pal::dark().sidebar, theme::Pal::dark().bg, theme::Pal::dark().card]),
+            ("light", ACCENT.light, ACCENT.on_light, [theme::Pal::light().sidebar, theme::Pal::light().bg, theme::Pal::light().card]),
+        ] {
+            assert!(theme::contrast(on, fill) >= 4.5, "{name}: on_accent on accent");
+            for s in surfaces {
+                assert!(theme::contrast(fill, s) >= 4.5, "{name}: accent text on a surface");
+            }
         }
     }
 }
