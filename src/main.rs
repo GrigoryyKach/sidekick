@@ -12,12 +12,16 @@ mod errors;
 mod events;
 mod i18n;
 mod nimvoro;
+#[allow(dead_code)]
+mod selfupdate;
 mod stt;
 mod strings;
 mod support;
 // Shared with the other NIMVORO tools: some of its widgets are not used here.
 #[allow(dead_code)]
 mod theme;
+#[allow(dead_code)]
+mod update_ui;
 #[cfg(windows)]
 mod win;
 #[cfg(not(windows))]
@@ -27,6 +31,7 @@ mod win;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    selfupdate::startup("sidekick");
     let mut cfg = config::Config::load();
     // Contract: config language, then the launcher marker, then English; remember the result.
     let lang = i18n::resolve(cfg.language.as_deref());

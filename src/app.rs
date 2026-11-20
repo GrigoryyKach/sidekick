@@ -9,6 +9,7 @@ use crate::nimvoro::{self, UpdateState, Updater};
 use crate::stt::{self, Stt};
 use crate::strings::{S, TABLE};
 use crate::support;
+use crate::update_ui;
 use crate::theme::{self, Btn, Pal, ThemeMode};
 use crate::win;
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -699,15 +700,17 @@ impl App {
             .inner_margin(Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(t.available.replace("{v}", &version)).font(theme::medium(13.0)).color(p.text));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
-                            self.cfg.save();
-                            ui.ctx().send_viewport_cmd(ViewportCommand::Close);
-                        }
+                if !update_ui::progress(ui, &self.updater, self.lang, p) {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(t.available.replace("{v}", &version)).font(theme::medium(13.0)).color(p.text));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
+                                self.cfg.save();
+                                ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                            }
+                        });
                     });
-                });
+                }
             });
     }
 
@@ -1121,24 +1124,28 @@ impl App {
         theme::section(ui, t.updates, p);
         switch_row(ui, p, t.check_on_start, t.check_on_start_hint, &mut self.draft.check_updates);
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let mut status = self.updater.status_text(self.lang);
-            if matches!(self.updater.state(), UpdateState::Available { .. }) {
-                status += &format!(" · {}", t.you_have.replace("{v}", self.updater.current));
-            }
-            theme::hint(ui, &status, p);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if let UpdateState::Available { .. } = self.updater.state() {
-                    if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
-                        self.cfg.save();
-                        ui.ctx().send_viewport_cmd(ViewportCommand::Close);
-                    }
-                } else if !self.updater.is_checking() && theme::button(ui, t.check_now, Btn::Link, p).clicked() {
-                    let c = ui.ctx().clone();
-                    self.updater.check(move || c.request_repaint());
+        if !update_ui::progress(ui, &self.updater, self.lang, p) {
+            ui.horizontal(|ui| {
+                let mut status = self.updater.status_text(self.lang);
+                if matches!(self.updater.state(), UpdateState::Available { .. }) {
+                    status += &format!(" · {}", t.you_have.replace("{v}", self.updater.current));
                 }
+                theme::hint(ui, &status, p);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if let UpdateState::Available { .. } = self.updater.state() {
+                        if theme::button(ui, t.update_btn, Btn::Secondary, p).clicked() {
+                            let saved = self.cfg.save();
+                            if self.updater.apply_if(saved) {
+                                ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+                            }
+                        }
+                    } else if !self.updater.is_checking() && theme::button(ui, t.check_now, Btn::Link, p).clicked() {
+                        let c = ui.ctx().clone();
+                        self.updater.check(move || c.request_repaint());
+                    }
+                });
             });
-        });
+        }
         theme::divider(ui, p);
         support::support_section(ui, self.lang);
         theme::divider(ui, p);
@@ -1410,6 +1417,14 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.updater.is_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // A self-update has started the new version: save and close by the normal path.
+        if self.updater.should_exit() {
+            self.cfg.save();
+            ctx.send_viewport_cmd(ViewportCommand::Close);
+        }
         if !self.window_ready {
             self.window_ready = win::init_window(&self.title);
             self.capture_excluded = win::is_capture_excluded();

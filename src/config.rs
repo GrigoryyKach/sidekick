@@ -223,9 +223,11 @@ impl Config {
         }
     }
 
-    pub fn save(&self) {
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(config_path(), s);
+    /// Writes the settings. `false` if they could not be written.
+    pub fn save(&self) -> bool {
+        match serde_json::to_string_pretty(self) {
+            Ok(s) => std::fs::write(config_path(), s).is_ok(),
+            Err(_) => false,
         }
     }
 

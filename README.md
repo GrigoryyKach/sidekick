@@ -103,6 +103,8 @@ When a new version is available, the Update button hands the update to the launc
 
 A release is built by GitHub Actions when a tag is pushed (a Windows job and a Linux job, one release with both assets): bump the version in `Cargo.toml`, then `git tag v{version} && git push --tags`.
 
+Without the launcher, the **Update** button updates the app by itself: it downloads the release archive from GitHub, checks its SHA-256 against the digest GitHub publishes for the asset, swaps the files (the old ones become `*.old`, are removed on the next start, and any failure rolls back) and restarts. If the app folder is not writable, the release page opens instead. Settings and the launcher language marker are never replaced.
+
 ## Support
 
 If you find this app useful, you can support its development: <https://donatello.to/MicsGame>
