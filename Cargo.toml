@@ -1,6 +1,6 @@
 [package]
 name = "sidekick"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 build = "build.rs"
 description = "Invisible AI assistant for calls: hidden from screen sharing"
